@@ -1,8 +1,8 @@
-# Аудит безопасности Error Monitor
+# Аудит безопасности GetException
 
-Дата проверки: 4 сентября 2026 года.
+Дата проверки: 5 сентября 2026 года.
 
-Этот документ проверяет архитектуру, описанную в [ADR-0001](./adr/0001-sentry-compatible-error-monitoring-platform.md), до начала реализации. Это аудит проектного решения, а не проверка готового кода и не penetration test. После появления приложения нужен повторный аудит исходного кода, Docker-конфигурации и production-сервера.
+Этот документ проверяет архитектуру, описанную в [ADR-0001](./0001-sentry-compatible-error-monitoring-platform.md), до начала реализации. Это аудит проектного решения, а не проверка готового кода и не penetration test. После появления приложения нужен повторный аудит исходного кода, Docker-конфигурации и production-сервера.
 
 ## Краткий вывод
 
@@ -24,6 +24,7 @@
 - защита от stored XSS, prototype pollution, log injection, decompression/JSON bomb и второго порядка инъекций;
 - изоляция обработки source maps;
 - безопасное восстановление TOTP Owner без обхода второго фактора через одно письмо;
+- защита первоначальной настройки домена и root-пользователя одноразовым bootstrap-токеном;
 - усиленная защита публикации npm-пакета и CI;
 - отдельные права на создание и чтение backup;
 - набор обязательных негативных security-тестов.
@@ -34,12 +35,13 @@
 
 | Данные или возможность              | Что произойдёт при утечке/захвате                                                |
 | ----------------------------------- | -------------------------------------------------------------------------------- |
-| Сессия участника Error Monitor      | Чтение ошибок доступных команд; для Owner — управление установкой                |
+| Сессия участника GetException       | Чтение ошибок доступных команд; для Owner — управление установкой                |
 | Данные событий                      | Раскрытие технических деталей и случайно попавших в ошибку данных                |
 | Source maps                         | Раскрытие исходного кода наблюдаемого SPA и помощь в поиске его уязвимостей      |
 | Пароли PostgreSQL и доступ к volume | Чтение или изменение хранящихся данных в пределах прав украденной роли           |
 | Ключ шифрования backup              | Расшифровка украденных резервных копий                                           |
 | CI upload token                     | Подмена source maps одного проекта до отзыва токена                              |
+| `NPM_TOKEN`                         | Публикация вредоносной версии любого доступного пакета `@getexception`           |
 | Право публикации npm-пакета         | Выполнение вредоносного JavaScript во всех подключивших новую версию приложениях |
 | Production host и Docker daemon     | Фактически полный контроль над сервисом и его данными                            |
 
@@ -60,7 +62,7 @@
 
 В browser-приложении Sentry использует публичный DSN с project ID и public key. Актуальный Sentry API прямо возвращает отдельное поле `dsn.public`. Такой ключ нужен, чтобы выбрать проект и применить его настройки, но он не является секретом браузера и не доказывает, какой именно JavaScript отправил запрос.
 
-Следствие одинаково для Sentry и Error Monitor: человек, который увидел DSN в bundle или DevTools, может сформировать собственное событие. Ни JWT, ни HMAC не решат это, если постоянный секрет положить в тот же SPA. Ограничивать этот риск нужно правом «только запись», allowed origins как фильтром, квотами, rate limit, заменой ключа и изоляцией приёмника.
+Следствие одинаково для Sentry и GetException: человек, который увидел DSN в bundle или DevTools, может сформировать собственное событие. Ни JWT, ни HMAC не решат это, если постоянный секрет положить в тот же SPA. Ограничивать этот риск нужно правом «только запись», allowed origins как фильтром, квотами, rate limit, заменой ключа и изоляцией приёмника.
 
 ### Отдельный слой приёма Relay
 
@@ -70,13 +72,13 @@
 
 ### Очистка данных
 
-Sentry умеет применять серверные правила data scrubbing, в том числе удалять IP, типовые пароли/карты и указанные поля. У Sentry это настраиваемая богатая схема. Для Error Monitor выбрано более строгое правило: сервер создаёт новый объект только из маленького разрешённого списка, а затем дополнительно маскирует похожие на секреты значения.
+Sentry умеет применять серверные правила data scrubbing, в том числе удалять IP, типовые пароли/карты и указанные поля. У Sentry это настраиваемая богатая схема. Для GetException выбрано более строгое правило: сервер создаёт новый объект только из маленького разрешённого списка, а затем дополнительно маскирует похожие на секреты значения.
 
 Это безопаснее для нашего узкого MVP, но не даёт абсолютной гарантии. Любая маскировка по шаблонам может не узнать необычно записанный или закодированный секрет. Поэтому основная защита — не собирать опасные источники данных и не передавать секреты в ошибки вообще.
 
 ### Source maps
 
-Sentry загружает source maps из CI с секретным auth token и предупреждает, что публичная раздача `.map` может раскрыть исходный код. Error Monitor делает токен ещё уже: один проект и только upload. Сам source map всё равно считается конфиденциальным недоверенным файлом.
+Sentry загружает source maps из CI с секретным auth token и предупреждает, что публичная раздача `.map` может раскрыть исходный код. GetException делает токен ещё уже: один проект и только upload. Сам source map всё равно считается конфиденциальным недоверенным файлом.
 
 ## Цепочка обработки недоверенного события
 
@@ -135,13 +137,13 @@ prisma.$queryRaw`SELECT ... WHERE project_id = ${projectId}`;
 
 ### Матрица ролей PostgreSQL
 
-| Роль БД                 | Может                                                                                                                  | Не может                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `error_monitor_migrate` | Применять проверенные миграции во время deploy                                                                         | Использоваться постоянно приложениями                                             |
-| `error_monitor_ingest`  | Читать ограниченное представление активных project/key/origin/quota; вставлять только допустимые колонки `event_inbox` | Читать inbox, события, source maps, аккаунты, сессии; UPDATE/DELETE; менять схему |
-| `error_monitor_worker`  | Забирать inbox, писать issue/error_event/stat, читать метаданные source maps                                           | Читать password/auth/session/invitation/recovery tables; менять схему             |
-| `error_monitor_web`     | Работать с кабинетом, auth и проектами через серверные правила                                                         | Менять схему; становиться superuser; подключаться извне Docker network            |
-| `error_monitor_backup`  | Только согласованный `pg_dump`                                                                                         | Менять данные и схему                                                             |
+| Роль БД                | Может                                                                                                                  | Не может                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `getexception_migrate` | Применять проверенные миграции во время deploy                                                                         | Использоваться постоянно приложениями                                             |
+| `getexception_ingest`  | Читать ограниченное представление активных project/key/origin/quota; вставлять только допустимые колонки `event_inbox` | Читать inbox, события, source maps, аккаунты, сессии; UPDATE/DELETE; менять схему |
+| `getexception_worker`  | Забирать inbox, писать issue/error_event/stat, читать метаданные source maps                                           | Читать password/auth/session/invitation/recovery tables; менять схему             |
+| `getexception_web`     | Работать с кабинетом, auth и проектами через серверные правила                                                         | Менять схему; становиться superuser; подключаться извне Docker network            |
+| `getexception_backup`  | Только согласованный `pg_dump`                                                                                         | Менять данные и схему                                                             |
 
 Роли должны быть созданы и проверены миграционным smoke test. Тест подключается каждой ролью и подтверждает не только разрешённые, но и запрещённые операции.
 
@@ -255,7 +257,7 @@ JSON может содержать ключи `__proto__`, `prototype` и `const
 
 ### Аккаунт конечного пользователя в app/transport/x-editor
 
-В штатном потоке Error Monitor не получает пароль пользователя и не получает возможность действовать в исходном приложении:
+В штатном потоке GetException не получает пароль пользователя и не получает возможность действовать в исходном приложении:
 
 - DSN принадлежит проекту мониторинга, а не пользователю;
 - запрос отправки не содержит Authorization;
@@ -272,7 +274,7 @@ https://monitor.example.com          личный кабинет
 https://ingest.monitor.example.com   публичный приём ошибок
 ```
 
-Session cookie Error Monitor имеет префикс `__Host-`, не содержит атрибута `Domain` и принадлежит только host кабинета. На host ingest cookie не создаются.
+Session cookie GetException имеет префикс `__Host-`, не содержит атрибута `Domain` и принадлежит только host кабинета. На host ingest cookie не создаются.
 
 ### Как токен исходного приложения всё же может утечь
 
@@ -280,9 +282,9 @@ Session cookie Error Monitor имеет префикс `__Host-`, не соде�
 2. Backend возвращает токен внутри ошибки, а приложение копирует весь ответ в message/breadcrumb.
 3. Токен присутствует в URL, а новый код снова разрешит query string.
 4. В package включат более широкую Sentry integration, которая собирает лишний context.
-5. Злоумышленник захватит публикацию `@sendsay/error-monitor-react` и выпустит версию, читающую localStorage или перехватывающую `fetch`.
+5. Злоумышленник захватит публикацию `@getexception/browser` или `@getexception/react` и выпустит версию, читающую localStorage или перехватывающую `fetch`.
 
-Если в самом наблюдаемом SPA уже есть XSS или пользователь установил вредоносное расширение, такой код и без Error Monitor работает в контексте страницы и может читать всё, что не защищено HttpOnly/браузерной изоляцией. Monitoring не создаёт этот доступ и не способен исправить компрометацию исходного приложения.
+Если в самом наблюдаемом SPA уже есть XSS или пользователь установил вредоносное расширение, такой код и без GetException работает в контексте страницы и может читать всё, что не защищено HttpOnly/браузерной изоляцией. Monitoring не создаёт этот доступ и не способен исправить компрометацию исходного приложения.
 
 Первые четыре риска снижают allow-list, маскирование и canary-тесты, но строковый scrubber принципиально не распознает секрет во всех возможных кодировках. Поэтому наблюдаемые SPA тоже должны соблюдать правила:
 
@@ -290,16 +292,18 @@ Session cookie Error Monitor имеет префикс `__Host-`, не соде�
 - по возможности хранить web-сессию в `Secure; HttpOnly; SameSite` cookie, а не в localStorage;
 - использовать короткоживущие access tokens и отзыв refresh sessions;
 - передавать в monitoring только server-generated безопасные коды ошибок;
-- ограничить CSP `connect-src` известными API и Error Monitor;
+- ограничить CSP `connect-src` известными API и GetException;
 - обновлять monitoring package осознанно, а не плавающим диапазоном без review.
 
 ### Компрометация npm-пакета — особый риск
 
-Серверная очистка здесь не помогает: вредоносный пакет работает **до** границы Error Monitor, внутри страницы исходного приложения. Он может отправить украденные данные прямо злоумышленнику и вообще не обращаться к нашему серверу.
+Серверная очистка здесь не помогает: вредоносный пакет работает **до** границы GetException, внутри страницы исходного приложения. Он может отправить украденные данные прямо злоумышленнику и вообще не обращаться к нашему серверу.
 
 Обязательная защита публикации:
 
-- npm trusted publishing/OIDC вместо постоянного publish token;
+- `NPM_TOKEN` хранится только в локальном `.env` или GitHub Secret и имеет минимальные права на пакеты `@getexception`;
+- GitHub передаёт `NPM_TOKEN` только защищённому publish job, а pull request, fixture и runtime-контейнеры его не получают;
+- локальный `.env` и временный `.npmrc` исключены из Git и проверяются secret scan;
 - protected `stable`, CODEOWNERS и минимум одно независимое approval для изменений SDK, release workflow и package contents;
 - immutable lockfile и закреплённые по commit SHA CI Actions;
 - минимальный список runtime dependencies и запрет install scripts без явного исключения;
@@ -309,23 +313,24 @@ Session cookie Error Monitor имеет префикс `__Host-`, не соде�
 - немедленная процедура deprecate/rotate/release при компрометации;
 - приложения закрепляют проверенную версию и обновляют её через обычный review.
 
-## Аудит аккаунтов личного кабинета Error Monitor
+## Аудит аккаунтов личного кабинета GetException
 
 ### Основные цепочки захвата
 
-| Атака                                              | Защита                                                                                                           |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Перебор/credential stuffing                        | Argon2id, rate limit по IP и account, нейтральный ответ, проверка известных скомпрометированных паролей          |
-| Кража reset/invitation URL                         | Одноразовый короткий токен, хеш в БД, срок, немедленное погашение, отсутствие URL в логах и Referer              |
-| Подмена Google callback                            | Authorization Code + PKCE, state, nonce, точные redirect URIs, проверка issuer/audience/signature/verified email |
-| Небезопасное объединение Google и password account | Никакого автоматического linking по email; привязка из свежей подтверждённой сессии                              |
-| Кража session cookie                               | `__Host-`, Secure, HttpOnly, SameSite, ротация, короткий idle timeout, абсолютный срок, отзыв                    |
-| CSRF                                               | SameSite плюс серверная проверка Origin/CSRF token и Content-Type для изменения данных                           |
-| IDOR/смена project ID                              | Проверка workspace, роли, membership и project relation на каждом серверном запросе                              |
-| Stored XSS из события                              | Только текстовый вывод, CSP, no external scripts, негативные E2E-тесты                                           |
-| Понижение последнего Owner                         | Запрещено транзакционным ограничением и тестом гонки                                                             |
+| Атака                                 | Защита                                                                                                   |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Перебор/credential stuffing           | Argon2id, rate limit по IP и account, нейтральный ответ, проверка известных скомпрометированных паролей  |
+| Кража reset/invitation URL            | Одноразовый короткий токен, хеш в БД, срок, немедленное погашение, отсутствие URL в логах и Referer      |
+| Кража session cookie                  | `__Host-`, Secure, HttpOnly, SameSite, ротация, короткий idle timeout, абсолютный срок, отзыв            |
+| CSRF                                  | SameSite плюс серверная проверка Origin/CSRF token и Content-Type для изменения данных                   |
+| IDOR/смена project ID                 | Проверка workspace, роли, membership и project relation на каждом серверном запросе                      |
+| Stored XSS из события                 | Только текстовый вывод, CSP, no external scripts, негативные E2E-тесты                                   |
+| Понижение последнего Owner            | Запрещено транзакционным ограничением и тестом гонки                                                     |
+| Захват новой установки через `/setup` | Одноразовый bootstrap-токен, атомарное создание root-пользователя и закрытие setup после первого запуска |
 
-Абсолютные ссылки приглашения, reset и OAuth callback строятся только из фиксированного production base URL. Заголовки `Host`, `Forwarded-Host` и параметр `returnTo` не могут выбрать произвольный домен; redirect target проходит allow-list. Поля `role`, `team`, `workspace` и `project` не принимаются из self-service профиля пользователя и назначаются только проверенной Owner-операцией.
+Абсолютные ссылки приглашения и reset строятся только из домена, сохранённого при первоначальной настройке. Заголовки `Host`, `Forwarded-Host` и параметр `returnTo` не могут выбрать произвольный домен, а redirect target проходит allow-list. Поля `role`, `team`, `workspace` и `project` не принимаются из self-service профиля пользователя и назначаются только проверенной Owner-операцией.
+
+До завершения первоначальной настройки доступны только `/setup` и технические health endpoints. `/setup` требует секрет из bootstrap URL, не принимает root email, роль или домен через query string и ограничивает попытки. Root-пользователь, Owner membership, домен и TOTP создаются одной транзакцией. После успеха bootstrap-токен удаляется, все незавершённые setup-сессии отзываются и повторный вызов возвращает нейтральный отказ.
 
 ### Восстановление TOTP Owner
 
@@ -341,7 +346,7 @@ Session cookie Error Monitor имеет префикс `__Host-`, не соде�
 
 ### Чувствительные изменения
 
-Для смены email, привязки/отвязки Google, отключения TOTP, создания CI-токена, замены DSN, повышения до Owner и удаления проекта нужна свежая сессия: повторный пароль или Google-вход плюс TOTP, если он обязателен. После смены пароля, email, MFA, роли или membership старые сессии отзываются либо немедленно переоценивают права на сервере.
+Для смены email, отключения TOTP, создания CI-токена, замены DSN, повышения до Owner и удаления проекта нужна свежая сессия: повторный пароль и TOTP, если он обязателен. После смены пароля, email, MFA, роли или membership старые сессии отзываются либо немедленно переоценивают права на сервере.
 
 ## Source maps и CI
 
@@ -387,11 +392,13 @@ Dashboard и ingest должны иметь разные origins и разные
 - каждый контейнер non-root, `read_only`, с `cap_drop: [ALL]`, `no-new-privileges` и отдельным tmpfs;
 - Docker socket, host root, SSH keys и каталоги других приложений не монтируются;
 - source-map volume доступен только Worker и upload-компоненту, не ingest;
-- ingest/worker не получают SMTP, Google, S3 и auth encryption secrets;
+- ingest/worker не получают SMTP, S3 и auth encryption secrets;
 - образы запускаются по digest/SHA, сканируются и регулярно пересобираются с security patches;
 - секреты не находятся в image layers, Git, CI output или клиентских env.
 
 Docker уменьшает последствия взлома одного процесса, но не является границей против root/владельца production host.
+
+Лендинг `https://getexception.github.io` разворачивается из отдельного репозитория GitHub Pages. В его workflow и настройках нет `NPM_TOKEN`, production credentials GetException или доступа к Docker host. Статический лендинг не обслуживает вход, dashboard API или ingest.
 
 В односерверном MVP PostgreSQL доступен только внутри изолированной Docker network. Если БД когда-либо выносится на другой host, подключение без проверки TLS-сертификата запрещено; это изменение требует отдельного review сетевой модели.
 
@@ -431,7 +438,7 @@ Audit log защищает от обычного изменения через �
 - DSN скомпрометирован — выпустить новый, дать окну миграции истечь, отозвать старый и очистить ложные события;
 - CI token скомпрометирован — отозвать, проверить все загруженные после подозрительной даты карты и повторно загрузить доверенный набор;
 - dashboard account скомпрометирован — отозвать все сессии, сбросить password/MFA, проверить audit log и действия Owner;
-- npm publishing скомпрометирован — остановить deploy/update, deprecate вредоносную версию, восстановить publishing trust, выпустить чистую версию и проверить приложения;
+- npm publishing скомпрометирован — отозвать и заменить `NPM_TOKEN`, остановить deploy/update, deprecate вредоносную версию, выпустить чистую версию и проверить приложения;
 - DB/host скомпрометирован — изолировать сервер, ротировать все credentials/ключи, восстановить в чистой среде и считать доступные события/source maps раскрытыми;
 - backup key скомпрометирован — ротировать ключ и credentials, создать новую цепочку копий и оценить, какие старые dump могли быть прочитаны.
 
@@ -439,30 +446,31 @@ Audit log защищает от обычного изменения через �
 
 Оценка дана для текущей архитектуры до реализации. «Остаточный риск» предполагает, что обязательные меры действительно выполнены.
 
-| №    | Риск                                                                        | Исходная критичность | Обязательная мера                                                             | Остаток                                                                 |
-| ---- | --------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| S-01 | Захвачена публикация npm-пакета; вредоносный JS крадёт данные исходного SPA | критическая          | OIDC publishing, review, provenance, pin versions, минимальные dependencies   | Нельзя полностью защититься, если доверенный maintainer/CI уже захвачен |
-| S-02 | Stored XSS через текст события захватывает действия участника               | критическая          | Только text nodes, запрет raw HTML, CSP, XSS E2E corpus                       | Новая UI-библиотека может добавить unsafe sink                          |
-| S-03 | IDOR или ошибка роли раскрывает проекты другой команды                      | критическая          | Scope на каждый запрос, deny-by-default, integration matrix tests             | Ошибка в новом endpoint остаётся возможной                              |
-| S-04 | Утекли host/DB/backup secrets                                               | критическая          | Изоляция, разные роли, encrypted disk/backup, ограниченный SSH                | Владелец/root host имеет полный доступ                                  |
-| S-05 | В событие случайно попал access token или личные данные                     | высокая              | SDK allow-list, server allow-list, scrubber, canary tests, короткий retention | Секрет в обычной/закодированной строке может не распознаться            |
-| S-06 | SQL injection в raw query или динамической сортировке                       | высокая              | Prisma CRUD, параметризация, запрет Unsafe/Prisma.raw(input), CI scan         | Ошибка review в новом коде                                              |
-| S-07 | RCE/OOM/path traversal при source-map upload/parse                          | высокая              | Размеры, безопасные имена, изолированный Worker, no egress, limits            | Zero-day parser dependency                                              |
-| S-08 | Захват Owner через слабый TOTP recovery                                     | высокая              | Recovery codes; второй Owner или offline bootstrap recovery; session revoke   | Компрометация одновременно recovery material и email/первого фактора    |
-| S-09 | Утечка CI upload token или подмена release artifact                         | высокая              | Protected environment, project/upload-only token, checksum, atomic publish    | До отзыва возможны ложные stack traces                                  |
-| S-10 | Выполнение кода через prototype pollution/unsafe merge                      | высокая              | Запрет специальных ключей, no deep merge, новый typed object, fuzz tests      | Уязвимость зависимости после sanitation                                 |
-| S-11 | SSRF во внутреннюю сеть                                                     | высокая              | Никогда не fetch URL из event/map metadata; ingest/worker no egress           | Компрометация web с разрешённым egress                                  |
-| S-12 | Кража session cookie/CSRF/OAuth callback mix-up                             | высокая              | `__Host-` cookie, CSRF, PKCE/state/nonce, exact redirect, rotation            | XSS может действовать через браузер без чтения cookie                   |
-| S-13 | Вредоносный JSON/regex/archive истощает CPU или память                      | высокая              | Bounded parse, limits, timeouts, safe regex, container quotas                 | Распределённая атака остаётся инфраструктурным риском                   |
-| S-14 | DSN используется для фальшивых событий                                      | средняя              | Write-only, origin filter, квоты, dedupe, rotation                            | Подделать источник полностью запретить нельзя                           |
-| S-15 | Ложные/control строки загрязняют operational logs                           | средняя              | Не логировать payload, enum reasons, JSON logs, control-char removal          | Ошибка в новом месте логирования                                        |
-| S-16 | Source maps или `.map` случайно опубликованы вместе с SPA                   | высокая              | Delete-after-upload и проверка deploy artifact                                | Другой pipeline может обойти проверку                                   |
-| S-17 | Устаревшая зависимость/образ содержит известную уязвимость                  | высокая              | SCA/container scan, SBOM, patch policy, pinned artifacts                      | Zero-day и задержка обновления                                          |
-| S-18 | Ошибочная proxy-конфигурация позволяет подделать IP или отправляет cookie   | средняя              | Replace forwarded headers, separate origins, credentials omit, proxy tests    | Неверное ручное изменение production config                             |
-| S-19 | Удалённый/повреждённый backup невозможно восстановить                       | средняя              | Separate write/read credentials, checksum, versioning, ручной restore test    | Только 3 ежедневные копии                                               |
-| S-20 | DDoS заполняет канал или ресурсы сервера                                    | высокая              | Caddy limits, quotas, bounded queue, внешний WAF/CDN при необходимости        | Один self-hosted сервер не остановит крупный botnet                     |
-| S-21 | Host-header/open-redirect отравляет invite/reset/OAuth URL                  | высокая              | Фиксированный base URL, exact redirect URI, allow-list return target          | Ошибка в новом auth route                                               |
-| S-22 | Злонамеренный Owner или root скрывает действия                              | средняя              | Персональные аккаунты, два Owner, re-auth, audit log                          | Внутренний DB/host admin может изменить локальный журнал                |
+| №    | Риск                                                                                        | Исходная критичность | Обязательная мера                                                                      | Остаток                                                                     |
+| ---- | ------------------------------------------------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| S-01 | Захвачены `NPM_TOKEN` или публикация npm-пакета; вредоносный JS крадёт данные исходного SPA | критическая          | Ограниченный GitHub Secret, review, provenance, pin versions, минимальные dependencies | Нельзя полностью защититься, если доверенный maintainer или CI уже захвачен |
+| S-02 | Stored XSS через текст события захватывает действия участника                               | критическая          | Только text nodes, запрет raw HTML, CSP, XSS E2E corpus                                | Новая UI-библиотека может добавить unsafe sink                              |
+| S-03 | IDOR или ошибка роли раскрывает проекты другой команды                                      | критическая          | Scope на каждый запрос, deny-by-default, integration matrix tests                      | Ошибка в новом endpoint остаётся возможной                                  |
+| S-04 | Утекли host/DB/backup secrets                                                               | критическая          | Изоляция, разные роли, encrypted disk/backup, ограниченный SSH                         | Владелец/root host имеет полный доступ                                      |
+| S-05 | В событие случайно попал access token или личные данные                                     | высокая              | SDK allow-list, server allow-list, scrubber, canary tests, короткий retention          | Секрет в обычной/закодированной строке может не распознаться                |
+| S-06 | SQL injection в raw query или динамической сортировке                                       | высокая              | Prisma CRUD, параметризация, запрет Unsafe/Prisma.raw(input), CI scan                  | Ошибка review в новом коде                                                  |
+| S-07 | RCE/OOM/path traversal при source-map upload/parse                                          | высокая              | Размеры, безопасные имена, изолированный Worker, no egress, limits                     | Zero-day parser dependency                                                  |
+| S-08 | Захват Owner через слабый TOTP recovery                                                     | высокая              | Recovery codes; второй Owner или offline bootstrap recovery; session revoke            | Компрометация одновременно recovery material и email/первого фактора        |
+| S-09 | Утечка CI upload token или подмена release artifact                                         | высокая              | Protected environment, project/upload-only token, checksum, atomic publish             | До отзыва возможны ложные stack traces                                      |
+| S-10 | Выполнение кода через prototype pollution/unsafe merge                                      | высокая              | Запрет специальных ключей, no deep merge, новый typed object, fuzz tests               | Уязвимость зависимости после sanitation                                     |
+| S-11 | SSRF во внутреннюю сеть                                                                     | высокая              | Никогда не fetch URL из event/map metadata; ingest/worker no egress                    | Компрометация web с разрешённым egress                                      |
+| S-12 | Кража session cookie или CSRF                                                               | высокая              | `__Host-` cookie, CSRF token, проверка Origin, ротация                                 | XSS может действовать через браузер без чтения cookie                       |
+| S-13 | Вредоносный JSON/regex/archive истощает CPU или память                                      | высокая              | Bounded parse, limits, timeouts, safe regex, container quotas                          | Распределённая атака остаётся инфраструктурным риском                       |
+| S-14 | DSN используется для фальшивых событий                                                      | средняя              | Write-only, origin filter, квоты, dedupe, rotation                                     | Подделать источник полностью запретить нельзя                               |
+| S-15 | Ложные/control строки загрязняют operational logs                                           | средняя              | Не логировать payload, enum reasons, JSON logs, control-char removal                   | Ошибка в новом месте логирования                                            |
+| S-16 | Source maps или `.map` случайно опубликованы вместе с SPA                                   | высокая              | Delete-after-upload и проверка deploy artifact                                         | Другой pipeline может обойти проверку                                       |
+| S-17 | Устаревшая зависимость/образ содержит известную уязвимость                                  | высокая              | SCA/container scan, SBOM, patch policy, pinned artifacts                               | Zero-day и задержка обновления                                              |
+| S-18 | Ошибочная proxy-конфигурация позволяет подделать IP или отправляет cookie                   | средняя              | Replace forwarded headers, separate origins, credentials omit, proxy tests             | Неверное ручное изменение production config                                 |
+| S-19 | Удалённый/повреждённый backup невозможно восстановить                                       | средняя              | Separate write/read credentials, checksum, versioning, ручной restore test             | Только 3 ежедневные копии                                                   |
+| S-20 | DDoS заполняет канал или ресурсы сервера                                                    | высокая              | Caddy limits, quotas, bounded queue, внешний WAF/CDN при необходимости                 | Один self-hosted сервер не остановит крупный botnet                         |
+| S-21 | Host-header/open-redirect отравляет invite/reset URL                                        | высокая              | Сохранённый домен установки, exact redirect URI, allow-list return target              | Ошибка в новом auth route                                                   |
+| S-22 | Злонамеренный Owner или root скрывает действия                                              | средняя              | Персональные аккаунты, два Owner, re-auth, audit log                                   | Внутренний DB/host admin может изменить локальный журнал                    |
+| S-23 | Посторонний первым завершает `/setup` и становится root-пользователем                       | критическая          | Одноразовый bootstrap-токен, rate limit, атомарный setup, немедленное закрытие route   | Утечка bootstrap URL до завершения настройки                                |
 
 ## Что обязательно сделать до первого production
 
@@ -474,7 +482,8 @@ Audit log защищает от обычного изменения через �
 - завершить strict payload allow-list и corpus/fuzz tests;
 - выполнить stored-XSS и межпроектные authorization E2E-тесты;
 - изолировать source-map parser и проверить traversal/zip bomb/OOM cases;
-- защитить npm trusted publishing, release environment и package provenance;
+- защитить `NPM_TOKEN`, release environment и package provenance;
+- защитить первоначальную настройку одноразовым bootstrap-токеном и закрыть `/setup` после создания root-пользователя;
 - реализовать безопасный Owner MFA recovery;
 - настроить encrypted backup с отдельными write/restore credentials;
 - провести ручной review production Compose/Caddy/firewall/secrets.
@@ -508,17 +517,19 @@ Audit log защищает от обычного изменения через �
 - Viewer/Developer не получают чужой проект сменой ID, фильтра, cursor, export/debug route или server action;
 - CSRF запрос с чужого origin не меняет данные;
 - cookie dashboard не появляется в запросе ingest;
-- Google callback с неверными state/nonce/issuer/audience/redirect отклоняется;
-- автоматический account linking по совпавшему email невозможен;
+- вход через Google и другие social providers отсутствует;
+- без bootstrap-токена нельзя создать root-пользователя или изменить домен установки;
+- два параллельных запроса setup не могут создать два root-пользователя, а повторный setup после успеха отклоняется;
 - password reset отзывает сессии, но не отключает TOTP;
 - Owner TOTP reset требует утверждённый recovery path;
 - гонка двух запросов не может удалить/понизить последнего Owner.
 
 ### CI, npm и source maps
 
-- fork PR не видит ни одного production secret;
-- опубликованный npm tarball имеет ожидаемый состав, provenance и лицензию;
-- fixture использует пакет из registry и отправляет только allow-listed данные;
+- fork PR не видит `NPM_TOKEN` или другой production secret;
+- логи publish job и его artifacts не содержат `NPM_TOKEN`, `.env` или временный `.npmrc`;
+- опубликованные npm tarball `@getexception/browser`, `@getexception/react` и `@getexception/cli` имеют ожидаемый состав, provenance и лицензию;
+- browser SPA и React SPA fixture используют пакеты из registry и отправляют только allow-listed данные;
 - malicious filenames, symlinks, absolute paths, traversal и zip bomb не выходят из staging directory;
 - `.map` отсутствуют в публичном deploy artifact после upload;
 - отозванный CI token и DSN перестают работать без перезапуска;
@@ -526,7 +537,7 @@ Audit log защищает от обычного изменения через �
 
 ## Итоговая оценка
 
-Сам публичный DSN не является каналом чтения. При корректной реализации он даёт злоумышленнику только ограниченную возможность отправить недоверенное событие. Доступ к PostgreSQL, аккаунту Error Monitor или аккаунту исходного SPA требует уже другой уязвимости.
+Сам публичный DSN не является каналом чтения. При корректной реализации он даёт злоумышленнику только ограниченную возможность отправить недоверенное событие. Доступ к PostgreSQL, аккаунту GetException или аккаунту исходного SPA требует уже другой уязвимости.
 
 Наиболее вероятный риск — случайная передача чувствительной строки в ошибке. Наиболее опасные риски — компрометация npm-пакета, stored XSS/ошибка авторизации кабинета и захват production host/секретов. Поэтому безопасность проекта нельзя сводить только к проверке DSN и защите от DDoS.
 
@@ -546,7 +557,6 @@ Audit log защищает от обычного изменения через �
 - [Prisma: безопасные и небезопасные raw queries](https://www.prisma.io/docs/orm/prisma-client/using-raw-sql/raw-queries)
 - [OWASP: Cross Site Scripting Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html)
 - [OWASP: Authorization](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)
-- [OWASP: OAuth 2.0](https://cheatsheetseries.owasp.org/cheatsheets/OAuth2_Cheat_Sheet.html)
 - [OWASP: Multifactor Authentication](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html)
 - [OWASP: File Upload](https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html)
 - [OWASP: Software Supply Chain Security](https://cheatsheetseries.owasp.org/cheatsheets/Software_Supply_Chain_Security_Cheat_Sheet.html)
