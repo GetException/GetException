@@ -62,8 +62,8 @@ MVP состоит из двух пользовательских частей:
 - база данных — PostgreSQL;
 - личный кабинет, ingest, worker и публичные npm-пакеты разрабатываются в одной monorepo `GetException`;
 - GetException разворачивается на отдельном Linux-сервере и не зависит от GitHub Pages;
-- локальный запуск, bootstrap, CI/CD и деплой максимально похожи на Selflify и selfchecks;
-- публичные Docker-образы и npm-пакеты публикуются по той же модели, что в референсных проектах;
+- локальный запуск, bootstrap, CI/CD и деплой используют конкретные решения из Selflify и selfchecks, перечисленные в разделе о референсных проектах;
+- публичные Docker-образы и npm-пакеты проходят отдельные build, publish и smoke test jobs;
 - лендинг разрабатывается и выпускается независимо от рабочего MVP.
 
 ## Что входит в MVP
@@ -648,6 +648,8 @@ http://localhost:5173
 
 Очередь хранит число попыток, время следующей попытки и состояние dead letter. Обработка идемпотентна по паре project ID + event ID, поэтому повторный запрос или retry не создаёт вторую запись.
 
+Один worker image запускается в двух режимах. `worker-events` обрабатывает новые события и может иметь несколько реплик. `worker-retention` запускается в одном экземпляре и удаляет данные короткими пакетами. Такое разделение не позволяет очистке истории задерживать обработку новых ошибок.
+
 ### Решено: базовый отпечаток
 
 По умолчанию отпечаток строится из:
@@ -896,7 +898,7 @@ HTTP client не должен автоматически ходить по URL, 
 
 ## Структура репозитория
 
-Репозиторий `GetException` является Yarn monorepo по модели selfchecks:
+Репозиторий `GetException` является Yarn monorepo:
 
 ```text
 apps/
@@ -920,11 +922,82 @@ scripts/               release/bootstrap/verification scripts
 fixtures/
   browser-spa/         проверка @getexception/browser из registry
   react-spa/           проверка @getexception/react из registry
+
+package.json           корневые scripts, workspaces и общие devDependencies
+.yarnrc.yml             Yarn с nodeLinker: node-modules
+eslint.config.mjs      общая конфигурация ESLint
+AGENTS.md              обязательные правила работы с репозиторием
 ```
 
 Лендинг не входит в эту структуру. Репозиторий `getexception.github.io` содержит статический сайт и отдельный workflow GitHub Pages.
 
-Node, Yarn, TypeScript, ESLint, форматирование и Turborepo закрепляются на совместимых актуальных версиях при создании репозитория. Версии меняются централизованно.
+Node, Yarn, TypeScript, ESLint, Prettier и Turborepo закрепляются на совместимых актуальных версиях при создании репозитория. Версии меняются централизованно. Yarn использует `nodeLinker: node-modules`; Plug and Play в проекте отключён.
+
+Корневой `package.json` содержит script `checks`. Команда `yarn checks` запускает все обязательные проверки monorepo и выполняется перед каждым коммитом. При появлении typecheck, тестов и сборки соответствующие команды добавляются в корневой `checks`.
+
+## Что берём из Selfchecks и Selflify
+
+Selfchecks и Selflify служат источниками проверенных приёмов для структуры репозитория, установки и выпуска. GetException не зависит от их кода и не копирует их продуктовую модель. Подробный разбор конкретных файлов, ограничений и лицензий находится в [отчёте по референсным проектам](./REFERENCE-PROJECTS.md).
+
+### Решения из Selfchecks
+
+GetException использует следующие решения из Selfchecks:
+
+- корневые Yarn workspaces для `apps/*` и `packages/*`, общие scripts и закреплённую версию Yarn;
+- `nodeLinker: node-modules`, поэтому Plug and Play не используется;
+- единые команды format, lint, typecheck, test и build из корневого `package.json`;
+- `yarn install --immutable` в CI и сборке Docker image;
+- отдельные приложения web и worker, отдельные Docker targets и отдельные образы в GHCR;
+- одноразовый сервис migrate, после успешного завершения которого запускаются runtime-сервисы;
+- настраиваемую в разумных границах параллельность worker без пересборки image;
+- корректное завершение worker по SIGINT и SIGTERM: перестать брать новые задачи, закончить или безопасно освободить текущие и закрыть соединения;
+- сериализацию production release через GitHub Actions concurrency;
+- проверку, что ветка `stable` не изменилась во время создания автоматического release commit;
+- теги Docker image `stable` и `sha-<commit>`, при этом production deploy использует конкретный SHA или digest;
+- публикацию npm-пакетов с `NPM_TOKEN` и provenance, проверку существующей версии и ожидание появления пакета в registry;
+- установку опубликованного npm tarball в чистый fixture вместо проверки только workspace-сборки;
+- bootstrap bundle с явным списком файлов и smoke test его структуры и режима `--skip-start`.
+
+В GetException список runtime-образов расширяется до web, ingest и worker. Корневая команда `yarn checks` объединяет обязательные проверки, чтобы локальный запуск и CI использовали один вход. Источники: [структура и scripts Selfchecks](https://github.com/selfchecks/selfchecks/blob/606876507bbe56dffce9140e5c162bb1ccd29ebb/package.json), [Yarn node-modules](https://github.com/selfchecks/selfchecks/blob/606876507bbe56dffce9140e5c162bb1ccd29ebb/.yarnrc.yml), [CI](https://github.com/selfchecks/selfchecks/blob/606876507bbe56dffce9140e5c162bb1ccd29ebb/.github/workflows/ci.yml), [release workflow](https://github.com/selfchecks/selfchecks/blob/606876507bbe56dffce9140e5c162bb1ccd29ebb/.github/workflows/deploy.yml), [production Compose](https://github.com/selfchecks/selfchecks/blob/606876507bbe56dffce9140e5c162bb1ccd29ebb/docker-compose.prod.yml) и [bootstrap smoke test](https://github.com/selfchecks/selfchecks/blob/606876507bbe56dffce9140e5c162bb1ccd29ebb/scripts/smoke-bootstrap.sh).
+
+### Решения из Selflify
+
+GetException использует следующие решения из Selflify:
+
+- установку в отдельный каталог `/opt/getexception` с постоянным подкаталогом `runtime`;
+- генерацию session secret и setup token во время первой установки;
+- создание `.env` с правами `0600` только при отсутствии файла;
+- отдельный access gate для `/setup`, который требует токен из серверного окружения;
+- пошаговую первоначальную настройку аккаунта и домена;
+- создание runtime-конфигурации и Caddyfile из версионированных шаблонов без перезаписи существующих файлов;
+- bootstrap archive с явным списком файлов, без тестов, документации и исходников, которые не нужны серверу;
+- Playwright E2E, который устанавливает опубликованный release на чистую машину, открывает `/setup`, завершает настройку и проверяет вход;
+- проверку наличия runtime-конфигурации перед последующим production deploy;
+- последовательное изменение runtime-конфигурации с проверкой ожидаемой ревизии, резервной копией, валидацией и откатом при ошибке;
+- запуск системных команд без shell, с отдельным массивом аргументов, timeout и ограничением размера вывода;
+- отдельный долгоживущий процесс для периодической очистки, адаптированный в GetException как `worker-retention`.
+
+GetException дополняет first launch настройкой TOTP и создаёт root-пользователя с ролью Owner. После успешной настройки setup token уничтожается, а не остаётся постоянным способом входа. Источники: [scripts Selflify](https://github.com/Selflify/Selflify/blob/7211a5e6b1c04da8db506a69b7fee86fc647c246/package.json), [bootstrap installer](https://github.com/Selflify/Selflify/blob/7211a5e6b1c04da8db506a69b7fee86fc647c246/scripts/install-selflify.sh), [генерация runtime-файлов](https://github.com/Selflify/Selflify/blob/7211a5e6b1c04da8db506a69b7fee86fc647c246/bootstrap/seed-runtime-files.py), [setup gate](https://github.com/Selflify/Selflify/blob/7211a5e6b1c04da8db506a69b7fee86fc647c246/src/components/setup-access-gate.tsx), [setup wizard](https://github.com/Selflify/Selflify/blob/7211a5e6b1c04da8db506a69b7fee86fc647c246/src/components/setup-wizard.tsx), [bootstrap E2E](https://github.com/Selflify/Selflify/blob/7211a5e6b1c04da8db506a69b7fee86fc647c246/e2e/bootstrap-install.spec.ts) и [production Compose](https://github.com/Selflify/Selflify/blob/7211a5e6b1c04da8db506a69b7fee86fc647c246/docker-compose.yml).
+
+### Что не переносим
+
+GetException не переносит решения, которые противоречат принятой архитектуре:
+
+- Redis из Selfchecks, потому что очередь MVP хранится в PostgreSQL inbox;
+- Cloudflare API token и автоматическое управление DNS из Selflify, потому что GetException принимает готовый домен и не управляет DNS-провайдером;
+- автоматическую установку Docker через удалённый shell script, потому что bootstrap проверяет Docker и выводит отдельную инструкцию по установке;
+- получение SSH host key через `ssh-keyscan` без заранее проверенного fingerprint;
+- общую роль PostgreSQL для всех runtime-процессов;
+- копирование всего repository checkout на production-сервер вместо версионированного bootstrap bundle и Docker images;
+- постоянный setup token после создания root-пользователя;
+- изменяемый тег `stable` как единственный идентификатор production image;
+- in-memory rate limit для входа как единственное общее ограничение между репликами;
+- проверку `service_started` вместо настоящего readiness endpoint;
+- безусловный `docker system prune -af`, который может удалить image, нужный для отката.
+
+Selfchecks распространяется под Elastic License 2.0. Поэтому из него берутся архитектурные идеи и проверяемое поведение, но код не копируется без отдельной проверки лицензии и происхождения. Selflify распространяется под MIT, однако его код также не переносится автоматически: каждое решение должно соответствовать границам безопасности GetException.
+
+Референсные решения считаются требованиями только в том виде, который описан в этом ADR. Изменения в Selfchecks или Selflify автоматически не меняют GetException.
 
 ## Конкретные инструменты реализации
 
@@ -1028,7 +1101,7 @@ Docker Compose поднимает PostgreSQL и при необходимост�
 
 - Caddy принимает только 80/443 и выдаёт TLS;
 - dashboard и ingest имеют разные origins и разные upstream; ingest не обслуживает auth/dashboard routes, а dashboard не принимает Envelope;
-- отдельные контейнеры web, ingest, worker, migrate, postgres;
+- отдельные контейнеры web, ingest, worker-events, worker-retention, migrate и postgres;
 - именованные volumes для PostgreSQL, source maps, Caddy и runtime-конфигурации;
 - health checks;
 - ограничение CPU, памяти и размера логов;
@@ -1071,6 +1144,12 @@ Docker Compose поднимает PostgreSQL и при необходимост�
 - проверяет health endpoint;
 - выводит одноразовый URL с bootstrap-токеном для первого открытия кабинета.
 
+Bootstrap устанавливает файлы в `/opt/getexception`. Изменяемые данные находятся в `/opt/getexception/runtime`, а скачанный bundle и Docker images считаются заменяемыми. Bundle содержит только production Compose, шаблоны Caddy и runtime-конфигурации, installer и необходимые metadata. Исходники, тесты, документация, локальные fixtures и development config в bundle не входят.
+
+Installer поддерживает `--install-dir`, `--archive-url`, `--skip-start` и передачу заранее созданных секретов через environment. Он использует `mktemp` и удаляет временный каталог через `trap`. Installer не устанавливает Docker автоматически. Если Docker или Compose отсутствуют, он останавливается и выводит отдельную инструкцию.
+
+Файл `.env` и runtime-конфигурация создаются только при отсутствии и получают права `0600`. Повторная установка не перезаписывает их. Перед распаковкой installer проверяет checksum и attestation опубликованного bundle. Архив извлекается только после проверки списка путей и запрета absolute path, `..` и symlink за пределы каталога установки.
+
 По этому URL оператор открывает мастер первоначальной настройки, задаёт домен установки и создаёт root-пользователя. Установка считается готовой только после настройки TOTP и успешной проверки dashboard и ingest origins.
 
 Однострочная команда сначала скачивает небольшой bootstrap и его опубликованный checksum/attestation, проверяет их, и только затем запускает установку. В документации также остаётся ручной вариант «скачать, проверить, запустить» для операторов, которые не разрешают pipe в shell.
@@ -1083,6 +1162,7 @@ Docker Compose поднимает PostgreSQL и при необходимост�
 
 ### Pull request в stable
 
+- `yarn checks`, который также обязателен перед каждым локальным коммитом;
 - неизменяемая установка зависимостей;
 - format check;
 - ESLint;
@@ -1097,6 +1177,8 @@ Docker Compose поднимает PostgreSQL и при необходимост�
 - проверка миграций на пустой и обновляемой БД;
 - dependency, license и secret scanning;
 - сборка и smoke test bootstrap bundle.
+
+GitHub Actions запускает `yarn checks` как единый обязательный шаг, а затем отдельные integration, Docker Compose и bootstrap jobs. Все jobs имеют `timeout-minutes` и минимальный блок `permissions`. Установка зависимостей всегда выполняется через `yarn install --immutable`.
 
 ### Push в stable
 
@@ -1113,7 +1195,15 @@ Docker Compose поднимает PostgreSQL и при необходимост�
 11. production разворачивается строго по SHA;
 12. запускаются health и ingestion smoke checks.
 
-Два production deploy не могут идти одновременно. Основная ветка и release environment защищены review rules. npm и GHCR используются по той же модели, что в Selflify/selfchecks.
+Два production deploy не могут идти одновременно. Workflow использует `concurrency` с `cancel-in-progress: false`. Основная ветка и release environment защищены review rules.
+
+Release workflow разделён на jobs `checks`, `prepare-release`, `build-images`, `publish-packages`, `publish-bootstrap`, `registry-smoke`, `bootstrap-e2e` и `deploy`. Каждый job получает только нужные secrets и permissions. `deploy` зависит от успешного завершения всех publish и smoke jobs.
+
+`prepare-release` повторно читает remote `stable` перед публикацией. Если ветка уже перешла на посторонний commit, job завершается без публикации старого кода. Если найден ожидаемый автоматический release commit с `[skip ci]`, workflow повторно использует его и не создаёт цикл release commits.
+
+`publish-packages` передаёт GitHub Secret `NPM_TOKEN` как `NODE_AUTH_TOKEN` и `YARN_NPM_AUTH_TOKEN` только на время публикации. Job сначала проверяет, существует ли версия в npm, затем публикует отсутствующую версию с provenance. `registry-smoke` ждёт появления версии, скачивает настоящий tarball и устанавливает его в чистые browser SPA и React SPA fixtures.
+
+`bootstrap-e2e` скачивает installer и bundle из опубликованного GitHub Release в чистую среду. Тест запускает Compose, открывает `/setup`, вводит bootstrap token, создаёт root-пользователя, настраивает TOTP и домен, затем проверяет вход и приём тестового события.
 
 Дополнительные правила supply chain:
 
@@ -1254,7 +1344,7 @@ Runtime credential backup job может только создать объек�
 17. Релиз основан на полном Git SHA, а source maps связываются через Debug ID.
 18. Уведомления не входят в MVP.
 19. Начальная ёмкость составляет 100 000 событий в сутки и всплеск 50 событий в секунду.
-20. Архитектура, bootstrap и CI/CD следуют подходам Selflify и selfchecks.
+20. Из Selfchecks и Selflify взяты конкретные схемы Yarn workspaces, одноразовой миграции, отдельных runtime-процессов, проверяемого bootstrap, first-launch E2E и release smoke tests.
 21. Кабинет использует `@base-ui/react`, Tailwind и семантические CSS-переменные.
 22. Утверждена browser support policy без Internet Explorer.
 23. Приглашения и восстановление пароля доставляются через SMTP.
