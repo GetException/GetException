@@ -142,6 +142,7 @@ prisma.$queryRaw`SELECT ... WHERE project_id = ${projectId}`;
 | `getexception_migrate` | Применять проверенные миграции во время deploy                                                                         | Использоваться постоянно приложениями                                             |
 | `getexception_ingest`  | Читать ограниченное представление активных project/key/origin/quota; вставлять только допустимые колонки `event_inbox` | Читать inbox, события, source maps, аккаунты, сессии; UPDATE/DELETE; менять схему |
 | `getexception_worker`  | Забирать inbox, писать issue/error_event/stat, читать метаданные source maps                                           | Читать password/auth/session/invitation/recovery tables; менять схему             |
+| `getexception_mail`    | Забирать и обновлять mail outbox                                                                                       | Читать password, TOTP, recovery codes и error events; менять схему                |
 | `getexception_web`     | Работать с кабинетом, auth и проектами через серверные правила                                                         | Менять схему; становиться superuser; подключаться извне Docker network            |
 | `getexception_backup`  | Только согласованный `pg_dump`                                                                                         | Менять данные и схему                                                             |
 
@@ -332,6 +333,32 @@ Session cookie GetException имеет префикс `__Host-`, не содер
 
 До завершения первоначальной настройки доступны только `/setup` и технические health endpoints. `/setup` требует секрет из bootstrap URL, не принимает root email, роль или домен через query string и ограничивает попытки. Root-пользователь, Owner membership, домен и TOTP создаются одной транзакцией. После успеха bootstrap-токен удаляется, все незавершённые setup-сессии отзываются и повторный вызов возвращает нейтральный отказ.
 
+### Приглашения и выдача доступа
+
+Создание, повторная отправка и отзыв приглашения требуют роль Owner и TOTP step-up не старше пяти минут. Роль Owner нельзя назначить приглашением. Роль Developer или Viewer и список команд сохраняются в invitation до отправки письма и не принимаются из формы регистрации или запроса принятия.
+
+Стандартные create, accept, reject и cancel routes organization plugin Better Auth не публикуются напрямую. Все операции проходят через серверный слой GetException. Внутренний invitation ID используется только для связей в БД и не принимается как credential.
+
+Invitation token содержит 32 случайных байта и хранится только как SHA-256 хеш. Ссылка помещает token в URL fragment. Код страницы отправляет его в теле POST-запроса, поэтому reverse proxy и web access log не получают token в request target. Страница не загружает сторонние ресурсы, использует `Referrer-Policy: no-referrer`, а ответы preview и accept получают `Cache-Control: no-store`.
+
+Anonymous preview возвращает только название workspace, имя пригласившего, роль, команды, срок и маскированный email. Ошибки для неизвестного, истёкшего, принятого и отозванного токена одинаковы. Preview, accept и resend имеют rate limit, а token, полный email и факт существования Account не попадают в audit metadata.
+
+Принятие существующим Account требует действующий `pending` token и подтверждённый email, который совпадает с email приглашения после нормализации. Для нового пользователя invitation token может только запросить отдельное подтверждение на email из invitation. До перехода по ссылке подтверждения сервер не принимает пароль и не создаёт Account. Одноразовая ссылка выдаёт короткую registration session в `HttpOnly` cookie.
+
+Завершение регистрации или принятие существующим Account блокирует invitation и создаёт Member вместе с team membership в одной транзакции. Частичное принятие невозможно. Уникальные ограничения и смена состояния позволяют успешно завершиться только одному из параллельных запросов.
+
+Повторная отправка создаёт новый token, меняет хеш и срок, а также увеличивает revision записи mail outbox. Worker перед отправкой проверяет текущую revision. Отзыв переводит invitation в `revoked` и отменяет необработанное письмо. Уже доставленное старое письмо остаётся бесполезным, потому что сервер повторно проверяет хеш и состояние.
+
+### Хранение и проверка TOTP
+
+Сервер хранит TOTP как versioned AES-256-GCM ciphertext с отдельным production key. В authenticated additional data входят user ID и состояние `pending` или `active`. Ingest, worker-events и worker-retention не получают ключ. Production web не запускается при отсутствии или неверной длине ключа, а backup секретов обязан включать этот ключ.
+
+Настройка состоит из pending credential и подтверждения первым кодом. До подтверждения второй фактор не считается включённым. Ответ с `otpauth://` URI, ручным secret и recovery codes получает `Cache-Control: no-store` и никогда не попадает в логи или audit metadata.
+
+Проверка принимает только шесть цифр в текущем 30-секундном окне или одном соседнем окне с каждой стороны. Сервер сравнивает значения за постоянное время, хранит последний принятый counter и обновляет его под блокировкой строки в той же транзакции, которая создаёт сессию или подтверждает step-up. Повторное и параллельное использование одного кода запрещено.
+
+Owner не использует trusted-device или email OTP для обхода TOTP. Auth rate limits хранятся в PostgreSQL и считаются по хешированным IP и account identifiers, поэтому перезапуск или вторая реплика web не сбрасывают ограничение.
+
 ### Восстановление TOTP Owner
 
 Сброс TOTP только по доступу к email превратил бы почту в способ обойти обязательный второй фактор. Поэтому:
@@ -346,7 +373,7 @@ Session cookie GetException имеет префикс `__Host-`, не содер
 
 ### Чувствительные изменения
 
-Для смены email, отключения TOTP, создания CI-токена, замены DSN, повышения до Owner и удаления проекта нужна свежая сессия: повторный пароль и TOTP, если он обязателен. После смены пароля, email, MFA, роли или membership старые сессии отзываются либо немедленно переоценивают права на сервере.
+Для смены email, управления TOTP, создания CI-токена, замены DSN, повышения до Owner и удаления проекта нужна свежая сессия. Сервер требует пароль и TOTP step-up не старше пяти минут. После смены пароля, email, MFA, роли или membership старые сессии отзываются либо немедленно переоценивают права на сервере.
 
 ## Source maps и CI
 
@@ -388,11 +415,12 @@ Dashboard и ingest должны иметь разные origins и разные
 
 - только Caddy публикует 80/443;
 - PostgreSQL слушает только закрытую Docker network и не имеет `ports:`;
-- web, ingest и worker находятся в отдельных network segments настолько, насколько позволяет Compose;
+- web, ingest, worker-events, worker-mail и worker-retention находятся в отдельных network segments настолько, насколько позволяет Compose;
 - каждый контейнер non-root, `read_only`, с `cap_drop: [ALL]`, `no-new-privileges` и отдельным tmpfs;
 - Docker socket, host root, SSH keys и каталоги других приложений не монтируются;
 - source-map volume доступен только Worker и upload-компоненту, не ingest;
-- ingest/worker не получают SMTP, S3 и auth encryption secrets;
+- worker-mail получает только SMTP credentials, а ingest, worker-events и worker-retention их не получают;
+- TOTP encryption key получает только web;
 - образы запускаются по digest/SHA, сканируются и регулярно пересобираются с security patches;
 - секреты не находятся в image layers, Git, CI output или клиентских env.
 
@@ -471,6 +499,7 @@ Audit log защищает от обычного изменения через �
 | S-21 | Host-header/open-redirect отравляет invite/reset URL                                        | высокая              | Сохранённый домен установки, exact redirect URI, allow-list return target              | Ошибка в новом auth route                                                   |
 | S-22 | Злонамеренный Owner или root скрывает действия                                              | средняя              | Персональные аккаунты, два Owner, re-auth, audit log                                   | Внутренний DB/host admin может изменить локальный журнал                    |
 | S-23 | Посторонний первым завершает `/setup` и становится root-пользователем                       | критическая          | Одноразовый bootstrap-токен, rate limit, атомарный setup, немедленное закрытие route   | Утечка bootstrap URL до завершения настройки                                |
+| S-24 | Гонка, утечка URL или подмена полей приглашения выдаёт чужой Account, роль или команду      | высокая              | Email-first registration, снимок role/team, row lock, одна транзакция, unique checks   | Ошибка в custom adapter вокруг Better Auth                                  |
 
 ## Что обязательно сделать до первого production
 
@@ -484,6 +513,7 @@ Audit log защищает от обычного изменения через �
 - изолировать source-map parser и проверить traversal/zip bomb/OOM cases;
 - защитить `NPM_TOKEN`, release environment и package provenance;
 - защитить первоначальную настройку одноразовым bootstrap-токеном и закрыть `/setup` после создания root-пользователя;
+- реализовать закрытые приглашения без публичных ссылок, проверить привязку к email, ротацию token и конкурентное принятие;
 - реализовать безопасный Owner MFA recovery;
 - настроить encrypted backup с отдельными write/restore credentials;
 - провести ручной review production Compose/Caddy/firewall/secrets.
@@ -520,6 +550,11 @@ Audit log защищает от обычного изменения через �
 - вход через Google и другие social providers отсутствует;
 - без bootstrap-токена нельзя создать root-пользователя или изменить домен установки;
 - два параллельных запроса setup не могут создать два root-пользователя, а повторный setup после успеха отклоняется;
+- TOTP остаётся pending до проверки первого кода, а ciphertext нельзя расшифровать для другого user ID или состояния credential;
+- повторное и параллельное использование одного TOTP code не создаёт сессию и не подтверждает step-up;
+- ответы MFA имеют `Cache-Control: no-store`, а audit log не содержит TOTP secret, code или recovery code;
+- trusted-device и email OTP не позволяют Owner обойти TOTP;
+- две реплики web используют общий auth rate limit из PostgreSQL;
 - password reset отзывает сессии, но не отключает TOTP;
 - Owner TOTP reset требует утверждённый recovery path;
 - гонка двух запросов не может удалить/понизить последнего Owner.

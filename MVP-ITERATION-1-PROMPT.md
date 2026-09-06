@@ -66,15 +66,25 @@ fixtures/
 Реализуй:
 
 - `/setup`, доступный только до завершения первоначальной настройки и только после проверки одноразового setup token;
-- атомарное создание системной настройки, root-пользователя, роли Owner и TOTP;
+- двухэтапную настройку TOTP: encrypted pending credential, проверку первого кода и только затем атомарное создание системной настройки, root-пользователя, роли Owner и active credential;
+- одноразовые recovery codes, которые показываются один раз и хранятся только как хеши;
 - уничтожение setup token после успеха и серверный запрет повторного setup;
 - вход по email, паролю и TOTP без Google OAuth;
 - защищённую сессию в host-only cookie кабинета;
+- `mfa_verified_at` в сессии и step-up не старше пяти минут для опасных действий;
 - создание проекта и выпуск публичного DSN;
 - список групп ошибок;
 - страницу группы с последними событиями и очищенным stack trace.
 
 Для этой итерации можно не делать приглашения, команды, полный RBAC и восстановление пароля. При этом authorization должен находиться на сервере, а схема данных должна позволять добавить роли и команды без переноса данных из временной модели.
+
+Не добавляй открытый signup route как временное упрощение. Root должен быть отдельным Account с отдельным Owner Member в единственном workspace. В README следующей итерации зафиксируй, что приглашения будут привязаны к нормализованному email, роли и нескольким командам. Они будут использовать одноразовый хешированный token, подтверждение email до приёма пароля и атомарное создание Member. Не добавляй многоразовые invitation links.
+
+TOTP secret должен содержать не менее 160 случайных бит. Используй шесть цифр, период 30 секунд и окно из текущего и двух соседних периодов. Сравнивай код за постоянное время. Храни versioned AES-256-GCM ciphertext с отдельным 32-байтным production key, случайным nonce и authenticated additional data из user ID и состояния `pending` или `active`. Web должен завершаться до открытия порта, если production key отсутствует или неверен.
+
+Храни номер последнего принятого TOTP периода и обновляй его под блокировкой строки в той же транзакции, которая создаёт сессию или подтверждает step-up. Один код нельзя принять дважды, включая два параллельных запроса. Ответы TOTP setup, status и step-up получают `Cache-Control: no-store`. Audit log хранит результат операции, но не password, secret, TOTP code или recovery code.
+
+Better Auth остаётся системой аккаунтов и сессий. При TOTP verification всегда передавай `trustDevice: false`, а сервер должен отклонять trusted-device режим для Owner. Проверь хранение secret и recovery codes выбранной версией Better Auth. Если оно не выполняет требования ADR, добавь узкий серверный adapter и отдельные таблицы. Не заменяй Owner TOTP кодом из email.
 
 ### Ingest
 
@@ -138,7 +148,9 @@ Transport отправляет только на HTTPS origin из DSN чере�
 
 Используй миграции Prisma для обычной схемы и параметризованный SQL только там, где нужен конкурентный claim inbox.
 
-Минимальная модель должна включать system settings, accounts, credentials или auth state, sessions, projects, DSN keys, inbox, events и issue groups. Секреты храни по правилам ADR: пароль и DSN key только в виде стойкого хеша, TOTP secret с защищённым хранением, setup token одноразово.
+Минимальная модель должна включать system settings, workspace, accounts, members, credentials или auth state, sessions, projects, DSN keys, inbox, events и issue groups. Секреты храни по правилам ADR. Пароль и DSN key хранятся только в виде стойкого хеша, TOTP имеет отдельные pending и active состояния, recovery codes хранятся как хеши, а setup token является одноразовым.
+
+Auth rate limit должен хранить bucket в PostgreSQL и считать попытки одновременно по IP и нормализованной учётной записи. В таблицу попадает только хеш identifier. Две реплики web должны видеть один счётчик.
 
 Подготовь отдельные роли PostgreSQL для web, ingest, worker, migrate и backup. Ingest должен иметь только минимальные права на проверку project key и запись очищенного inbox record. Он не должен читать auth, session или готовые events.
 
@@ -148,12 +160,15 @@ Transport отправляет только на HTTPS origin из DSN чере�
 
 - `postgres`;
 - `migrate`;
+- `caddy`;
 - `web`;
 - `ingest`;
 - `worker-events`;
 - `worker-retention`.
 
 Runtime-сервисы запускаются только после успешной миграции и readiness зависимостей. Добавь отдельные liveness и readiness endpoints. Readiness ingest проверяет способность записать в inbox. Worker сообщает глубину очереди и возраст старейшей задачи без публикации метрик в интернет.
+
+Caddy должен направлять dashboard и ingest на разные локальные hosts, чтобы E2E проверял настоящие границы cookie, CORS и routes. Dashboard не принимает Envelope, а ingest не обслуживает auth или dashboard API.
 
 Не добавляй Redis или BullMQ. Не устанавливай Docker автоматически. Не используй изменяемый тег `stable` как единственный production identifier.
 
@@ -166,6 +181,7 @@ Runtime-сервисы запускаются только после успеш
 - Prettier check;
 - ESLint;
 - TypeScript typecheck;
+- architecture check для зависимостей и runtime-границ workspaces;
 - unit tests;
 - сборку приложений и пакетов.
 
@@ -173,7 +189,12 @@ Runtime-сервисы запускаются только после успеш
 
 - атомарности первого setup;
 - запрета повторного setup;
-- входа с TOTP;
+- активации TOTP только после первого корректного кода;
+- шифрования pending и active secret с привязкой к user ID и состоянию;
+- входа с TOTP и запрета повторного или параллельного использования одного кода;
+- запрета trusted-device и email OTP bypass для Owner;
+- общего auth rate limit между двумя экземплярами web;
+- `Cache-Control: no-store` и отсутствия MFA secrets в audit log;
 - очистки чувствительных полей;
 - durable inbox insert;
 - двух параллельных worker без двойной обработки;
@@ -192,12 +213,15 @@ Runtime-сервисы запускаются только после успеш
 - source map upload, CLI и symbolication;
 - приглашения, команды и полный набор ролей;
 - SMTP и восстановление пароля;
+- transactional mail outbox и `worker-mail`;
 - уведомления;
 - performance tracing, replay, profiling и логи как продукт;
 - production deploy, автоматический release commit и публикацию пакетов;
 - отдельный лендинг `getexception.github.io`.
 
 Оставь для этих функций явные границы модулей и короткий список следующей итерации, но не создавай фиктивные реализации.
+
+Для следующей итерации считай раздел приглашений в ADR и `REFERENCE-PROJECTS.md` готовым контрактом. Не проектируй альтернативную модель приглашений внутри первой итерации.
 
 ## Результат
 
