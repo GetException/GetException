@@ -4,7 +4,13 @@ import { parse } from "yaml";
 
 type Workflow = {
   on: Record<string, unknown>;
-  jobs: Record<string, { needs?: string | string[]; steps?: unknown[] }>;
+  jobs: Record<
+    string,
+    {
+      needs?: string | string[];
+      steps?: { uses?: string; with?: Record<string, unknown> }[];
+    }
+  >;
 };
 
 function workflow(name: string): Workflow {
@@ -20,6 +26,25 @@ function dependencies(config: Workflow, job: string): string[] {
 }
 
 describe("independent server and SDK releases", () => {
+  it("uploads required reports and fixtures from the hidden artifacts directory", () => {
+    for (const name of ["release", "sdk-release"]) {
+      const steps = Object.values(workflow(name).jobs).flatMap(
+        (job) => job.steps ?? [],
+      );
+
+      for (const step of steps) {
+        if (
+          step.uses?.startsWith("actions/upload-artifact@") &&
+          String(step.with?.path).includes(".artifacts/")
+        ) {
+          expect(step.with?.["include-hidden-files"]).toBe(true);
+          expect(step.with?.["if-no-files-found"]).toBe("error");
+          expect(step.with?.path).not.toBe(".artifacts/");
+        }
+      }
+    }
+  });
+
   it("can deploy a stable push without npm credentials or SDK publication", () => {
     const config = workflow("release");
     const jobs = dependencies(config, "deploy");

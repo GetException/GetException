@@ -91,6 +91,8 @@ jobs:
         with:
           name: vulnerabilities-${{ matrix.target }}
           path: .artifacts/grype-*.json
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 7
       - name: Record immutable image reference
         env:
