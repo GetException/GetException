@@ -352,7 +352,7 @@ class Installation:
         self.compose(target, "config", "--quiet")
         self.compose(target, "pull")
         self.compose(target, "up", "-d", "--wait", "--wait-timeout", "120", "postgres")
-        self.compose(target, "run", "--rm", "--no-deps", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
+        self.compose(target, "run", "--rm", "--no-deps", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
         if old:
             self.backup(old)
         journal = {"previous": old.name if old else None, "target": target.name, "phase": "migration"}

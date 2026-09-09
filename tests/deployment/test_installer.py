@@ -125,6 +125,25 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(installation.pending.exists())
         self.assertEqual(installation.calls[-1], (old.name, ("ready",)))
 
+    def test_caddy_preflight_invokes_the_binary_and_stops_before_migration_on_failure(self):
+        installation, old = self.active()
+        target = self.release()
+        preflight = ("run", "--rm", "--no-deps", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
+
+        def compose(release, *args, **kwargs):
+            if "validate" in args:
+                self.assertEqual(args, preflight)
+                raise installer.Failure("invalid Caddy configuration")
+            return ""
+
+        with patch.object(installation, "compose", side_effect=compose) as calls:
+            with self.assertRaisesRegex(installer.Failure, "invalid Caddy configuration"):
+                installation.deploy(target)
+        self.assertEqual(calls.call_args.args, (target, *preflight))
+        self.assertEqual(installation.current(), old)
+        self.assertEqual(installation.calls, [])
+        self.assertFalse(installation.pending.exists())
+
     def test_failed_migration_keeps_journal_and_blocks_retry(self):
         installation, old = self.active()
         target = self.release()

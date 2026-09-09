@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import subprocess
@@ -22,6 +23,19 @@ spec.loader.exec_module(bundle)
 
 def run(args, **kwargs):
     subprocess.run(args, check=True, **kwargs)
+
+
+def run_compose(arguments, redactions, *, stdout=subprocess.PIPE):
+    result = subprocess.run(arguments, stdout=stdout, stderr=subprocess.PIPE, timeout=600)
+    if result.returncode:
+        detail = result.stderr.decode(errors="replace")
+        for value in sorted(set(redactions), key=len, reverse=True):
+            if value:
+                detail = detail.replace(value, "[REDACTED]")
+        # Test setup and application credentials use 64-character hex values.
+        detail = re.sub(r"\b[a-fA-F0-9]{64}\b", "[REDACTED]", detail)
+        raise installer.Failure(f"Test Docker Compose exited with {result.returncode}: {detail[-3000:]}")
+    return result.stdout.decode().strip() if result.stdout else ""
 
 
 def main():
@@ -109,9 +123,11 @@ def main():
                 # Local build tags are available only in this isolated test, never in the production controller.
                 if arguments == ("pull",) and args.build:
                     return ""
-                return installer.run(["docker", "compose", "-p", project, "--env-file", str(root / "runtime/.env"),
-                                      "--env-file", str(image_env), "-f", str(target / "compose.yaml"),
-                                      "-f", str(work / "override.json"), *arguments], stdout=stdout)
+                config = installer.read_env(root / "runtime/.env")
+                redactions = [config.get(key, "") for key in [*installer.SECRET_KEYS, "SETUP_TOKEN_HASH", "SMTP_USER", "SMTP_PASSWORD"]]
+                return run_compose(["docker", "compose", "-p", project, "--env-file", str(root / "runtime/.env"),
+                                    "--env-file", str(image_env), "-f", str(target / "compose.yaml"),
+                                    "-f", str(work / "override.json"), *arguments], redactions, stdout=stdout)
 
             def smoke(self, target):
                 # This test uses a local CA; production smoke never disables certificate verification.
