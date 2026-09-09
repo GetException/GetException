@@ -1,0 +1,49 @@
+{
+	admin off
+	email {$ACME_EMAIL}
+	servers {
+		timeouts {
+			read_header 5s
+			read_body 10s
+			write 30s
+			idle 30s
+		}
+		max_header_size 16KB
+	}
+}
+(proxy_headers) {
+	header_up -Forwarded
+	header_up -X-Forwarded-For
+	header_up -X-Forwarded-Host
+	header_up X-Forwarded-Proto https
+	header_up X-Real-IP {remote_host}
+}
+{$DASHBOARD_HOST} {
+	@private path /metrics /health/* /api/*/envelope/*
+	respond @private 404
+	request_body {
+		max_size 16KB
+	}
+	header {
+		Referrer-Policy no-referrer
+		X-Content-Type-Options nosniff
+		Strict-Transport-Security "max-age=31536000"
+	}
+	reverse_proxy web:3000 {
+		import proxy_headers
+	}
+}
+{$INGEST_HOST} {
+	@envelope path_regexp envelope ^/api/[a-f0-9-]{36}/envelope/$
+	handle @envelope {
+		request_body {
+			max_size 1280KB
+		}
+		reverse_proxy ingest:3001 {
+			import proxy_headers
+		}
+	}
+	handle {
+		respond 404
+	}
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@getexception/ingest",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@getexception/config": "workspace:*",
+    "@getexception/db": "workspace:*",
+    "@getexception/protocol": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsup src/main.ts --format esm --platform node --out-dir dist",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/main.js"
+  },
+  "license": "Elastic-2.0"
+}

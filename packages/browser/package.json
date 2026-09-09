@@ -1,0 +1,33 @@
+{
+  "name": "@getexception/browser",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@getexception/sentry-browser": "npm:@sentry/browser@10.73.0"
+  },
+  "devDependencies": {
+    "@getexception/protocol": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GetException/GetException.git",
+    "directory": "packages/browser"
+  }
+}

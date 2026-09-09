@@ -1,0 +1,12 @@
+# Create this team and grant it write access before enabling protected releases.
+# Require code-owner review in the stable branch ruleset.
+/packages/browser/ @GetException/maintainers
+/packages/react/ @GetException/maintainers
+/packages/protocol/ @GetException/maintainers
+/package.json @GetException/maintainers
+/yarn.lock @GetException/maintainers
+/.github/ @GetException/maintainers
+/docker/ @GetException/maintainers
+/deploy/ @GetException/maintainers
+/scripts/release/ @GetException/maintainers
+/scripts/install-getexception.sh @GetException/maintainers

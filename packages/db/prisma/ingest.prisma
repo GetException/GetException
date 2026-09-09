@@ -1,0 +1,29 @@
+// Client-only projection of the migrated schema. Never run migrations against this file.
+generator client {
+  provider = "prisma-client"
+  output = "../generated-ingest"
+  previewFeatures = ["views"]
+}
+datasource db {
+  provider = "postgresql"
+}
+model EventInbox {
+  id String @id
+  projectId String?
+  eventId String
+  payload Json
+  @@map("event_inbox")
+}
+view IngestionConfig {
+  id String @unique
+  projectId String
+  keyHash String
+  origin String?
+  dailyQuota Int
+  allowedTags String[]
+  @@map("ingestion_config")
+}
+view RuntimeSchema {
+  version Int @unique
+  @@map("runtime_schema")
+}

@@ -1,0 +1,15 @@
+node_modules
+.yarn
+yarn.lock
+**/.next
+**/dist
+packages/db/generated
+test-results
+playwright-report
+.artifacts
+runtime
+
+packages/db/generated-ingest/
+
+apps/web/next-env.d.ts
+**/__pycache__

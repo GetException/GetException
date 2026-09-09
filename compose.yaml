@@ -1,0 +1,208 @@
+x-runtime: &runtime
+  restart: unless-stopped
+  init: true
+  read_only: true
+  user: "1000:1000"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:size=64m,mode=1777"]
+  mem_limit: 512m
+  cpus: 1.0
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  depends_on:
+    postgres: { condition: service_healthy }
+    migrate: { condition: service_completed_successfully }
+x-health: &health
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
+services:
+  postgres:
+    image: postgres:17.6-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: getexception
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run yarn local:env}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      MIGRATE_PASSWORD: ${MIGRATE_PASSWORD:?Run yarn local:env}
+      WEB_PASSWORD: ${WEB_PASSWORD:?Run yarn local:env}
+      INGEST_PASSWORD: ${INGEST_PASSWORD:?Run yarn local:env}
+      WORKER_PASSWORD: ${WORKER_PASSWORD:?Run yarn local:env}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:?Run yarn local:env}
+      BACKUP_PASSWORD: ${BACKUP_PASSWORD:?Run yarn local:env}
+    volumes:
+      [
+        postgres-data:/var/lib/postgresql/data,
+        ./docker/init-db.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro,
+      ]
+    networks: [database]
+    healthcheck:
+      <<: *health
+      test: [CMD-SHELL, "pg_isready -U postgres -d getexception"]
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+  migrate:
+    build: { context: ., dockerfile: docker/Dockerfile, target: migrate }
+    image: getexception-migrate:${IMAGE_TAG:-local}
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://getexception_migrate:${MIGRATE_PASSWORD}@postgres:5432/getexception
+      SETUP_TOKEN_HASH: ${SETUP_TOKEN_HASH:?Run yarn local:env}
+    networks: [database]
+    depends_on: { postgres: { condition: service_healthy } }
+  web:
+    <<: *runtime
+    build: { context: ., dockerfile: docker/Dockerfile, target: web }
+    image: getexception-web:${IMAGE_TAG:-local}
+    mem_limit: 1g
+    environment:
+      DATABASE_URL: postgresql://getexception_web:${WEB_PASSWORD}@postgres:5432/getexception
+      DASHBOARD_ORIGIN: https://${DASHBOARD_HOST:-monitor.localhost}
+      INGEST_ORIGIN: https://${INGEST_HOST:-ingest.monitor.localhost}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Run yarn local:env}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Run yarn local:env}
+      AUTH_RATE_KEY: ${AUTH_RATE_KEY:?Run yarn local:env}
+      MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run yarn local:env}
+    networks: [dashboard, database]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  ingest:
+    <<: *runtime
+    build: { context: ., dockerfile: docker/Dockerfile, target: ingest }
+    image: getexception-ingest:${IMAGE_TAG:-local}
+    environment:
+      DATABASE_URL: postgresql://getexception_ingest:${INGEST_PASSWORD}@postgres:5432/getexception
+      INGEST_ORIGIN: https://${INGEST_HOST:-ingest.monitor.localhost}
+      TRUST_PROXY: "1"
+    networks: [ingestion, database]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  worker-events:
+    <<: *runtime
+    build: { context: ., dockerfile: docker/Dockerfile, target: worker }
+    image: getexception-worker:${IMAGE_TAG:-local}
+    environment:
+      DATABASE_URL: postgresql://getexception_worker:${WORKER_PASSWORD}@postgres:5432/getexception
+      WORKER_MODE: worker-events
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+    networks: [database]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  worker-retention:
+    <<: *runtime
+    build: { context: ., dockerfile: docker/Dockerfile, target: worker }
+    image: getexception-worker:${IMAGE_TAG:-local}
+    environment:
+      DATABASE_URL: postgresql://getexception_worker:${WORKER_PASSWORD}@postgres:5432/getexception
+      WORKER_MODE: worker-retention
+    deploy: { replicas: 1 }
+    networks: [database]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  worker-mail:
+    <<: *runtime
+    build: { context: ., dockerfile: docker/Dockerfile, target: mail }
+    image: getexception-mail:${IMAGE_TAG:-local}
+    environment:
+      DATABASE_URL: postgresql://getexception_mail:${MAIL_PASSWORD}@postgres:5432/getexception
+      MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run yarn local:env}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_MODE: ${SMTP_MODE:-local}
+      SMTP_FROM: ${SMTP_FROM:-getexception@example.test}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    networks: [database, mail]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3003/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  mailpit:
+    image: axllent/mailpit:v1.31.1
+    restart: unless-stopped
+    ports: ["127.0.0.1:8025:8025"]
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_DISABLE_VERSION_CHECK: "true"
+      MP_SMTP_DISABLE_RDNS: "true"
+      MP_ALLOWED_HOSTS: localhost,127.0.0.1
+      MP_MAX_MESSAGES: "500"
+    volumes: [mailpit-data:/data]
+    networks: [mail]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    ports: ["127.0.0.1:443:443"]
+    environment:
+      DASHBOARD_HOST: ${DASHBOARD_HOST:-monitor.localhost}
+      INGEST_HOST: ${INGEST_HOST:-ingest.monitor.localhost}
+    volumes:
+      [
+        ./docker/Caddyfile:/etc/caddy/Caddyfile:ro,
+        caddy-data:/data,
+        caddy-config:/config,
+        ./fixtures/browser-spa/dist:/srv/browser:ro,
+        ./fixtures/react-spa/dist:/srv/react:ro,
+      ]
+    networks: [edge, dashboard, ingestion]
+    depends_on:
+      web: { condition: service_healthy }
+      ingest: { condition: service_healthy }
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+networks:
+  edge: {}
+  dashboard: { internal: true }
+  ingestion: { internal: true }
+  database: { internal: true }
+  mail: { internal: true }
+volumes:
+  postgres-data: {}
+  caddy-data: {}
+  caddy-config: {}
+  mailpit-data: {}

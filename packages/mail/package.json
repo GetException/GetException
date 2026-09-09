@@ -1,0 +1,8 @@
+{
+  "name": "@getexception/mail",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "license": "Elastic-2.0"
+}

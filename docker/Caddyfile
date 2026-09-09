@@ -1,0 +1,63 @@
+{
+	admin off
+	default_bind {$CADDY_BIND:0.0.0.0}
+	skip_install_trust
+	auto_https disable_redirects
+	servers {
+		timeouts {
+			read_header 5s
+			read_body 10s
+			write 30s
+			idle 30s
+		}
+		max_header_size 16KB
+	}
+}
+(proxy_headers) {
+	header_up -Forwarded
+	header_up -X-Forwarded-For
+	header_up -X-Forwarded-Host
+	header_up X-Forwarded-Proto https
+	header_up X-Real-IP {remote_host}
+}
+{$DASHBOARD_HOST:monitor.localhost} {
+	tls internal
+	@private path /metrics /health/* /api/*/envelope/*
+	respond @private 404
+	request_body {
+		max_size 16KB
+	}
+	header {
+		Referrer-Policy no-referrer
+		X-Content-Type-Options nosniff
+		Strict-Transport-Security "max-age=31536000"
+	}
+	reverse_proxy {$WEB_UPSTREAM:web:3000} {
+		import proxy_headers
+	}
+}
+{$INGEST_HOST:ingest.monitor.localhost} {
+	tls internal
+	@envelope path_regexp envelope ^/api/[a-f0-9-]{36}/envelope/$
+	handle @envelope {
+		request_body {
+			max_size 1280KB
+		}
+		reverse_proxy {$INGEST_UPSTREAM:ingest:3001} {
+			import proxy_headers
+		}
+	}
+	handle {
+		respond 404
+	}
+}
+{$BROWSER_FIXTURE_HOST:browser.monitor.localhost} {
+	tls internal
+	root * {$BROWSER_ROOT:/srv/browser}
+	file_server
+}
+{$REACT_FIXTURE_HOST:react.monitor.localhost} {
+	tls internal
+	root * {$REACT_ROOT:/srv/react}
+	file_server
+}

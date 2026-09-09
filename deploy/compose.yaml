@@ -1,0 +1,186 @@
+name: getexception
+x-runtime: &runtime
+  restart: unless-stopped
+  init: true
+  read_only: true
+  user: "1000:1000"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:size=64m,mode=1777"]
+  mem_limit: 512m
+  cpus: 1.0
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  depends_on:
+    postgres: { condition: service_healthy }
+x-health: &health
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
+services:
+  postgres:
+    image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: getexception
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run the production installer}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      MIGRATE_PASSWORD: ${MIGRATE_PASSWORD:?Run the production installer}
+      WEB_PASSWORD: ${WEB_PASSWORD:?Run the production installer}
+      INGEST_PASSWORD: ${INGEST_PASSWORD:?Run the production installer}
+      WORKER_PASSWORD: ${WORKER_PASSWORD:?Run the production installer}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:?Run the production installer}
+      BACKUP_PASSWORD: ${BACKUP_PASSWORD:?Run the production installer}
+    volumes:
+      [
+        postgres-data:/var/lib/postgresql/data,
+        ./init-db.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro,
+      ]
+    networks: [database]
+    healthcheck:
+      <<: *health
+      test: [CMD-SHELL, "pg_isready -U postgres -d getexception"]
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+  migrate:
+    image: ${MIGRATE_IMAGE:?Use a verified release}
+    restart: "no"
+    profiles: [maintenance]
+    environment:
+      DATABASE_URL: postgresql://getexception_migrate:${MIGRATE_PASSWORD}@postgres:5432/getexception
+      SETUP_TOKEN_HASH: ${SETUP_TOKEN_HASH:?Run the production installer}
+    networks: [database]
+    depends_on: { postgres: { condition: service_healthy } }
+  web:
+    <<: *runtime
+    image: ${WEB_IMAGE:?Use a verified release}
+    mem_limit: 1g
+    environment:
+      DATABASE_URL: postgresql://getexception_web:${WEB_PASSWORD}@postgres:5432/getexception
+      DASHBOARD_ORIGIN: https://${DASHBOARD_HOST:?Configure dashboard domain}
+      INGEST_ORIGIN: https://${INGEST_HOST:?Configure ingest domain}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Run the production installer}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Run the production installer}
+      AUTH_RATE_KEY: ${AUTH_RATE_KEY:?Run the production installer}
+      MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run the production installer}
+    networks: [dashboard, database]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  ingest:
+    <<: *runtime
+    image: ${INGEST_IMAGE:?Use a verified release}
+    environment:
+      DATABASE_URL: postgresql://getexception_ingest:${INGEST_PASSWORD}@postgres:5432/getexception
+      INGEST_ORIGIN: https://${INGEST_HOST:?Configure ingest domain}
+      TRUST_PROXY: "1"
+    networks: [ingestion, database]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  worker-events:
+    <<: *runtime
+    image: ${WORKER_IMAGE:?Use a verified release}
+    environment:
+      DATABASE_URL: postgresql://getexception_worker:${WORKER_PASSWORD}@postgres:5432/getexception
+      WORKER_MODE: worker-events
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+    networks: [database]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  worker-retention:
+    <<: *runtime
+    image: ${WORKER_IMAGE:?Use a verified release}
+    environment:
+      DATABASE_URL: postgresql://getexception_worker:${WORKER_PASSWORD}@postgres:5432/getexception
+      WORKER_MODE: worker-retention
+    deploy: { replicas: 1 }
+    networks: [database]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  worker-mail:
+    <<: *runtime
+    image: ${MAIL_IMAGE:?Use a verified release}
+    environment:
+      DATABASE_URL: postgresql://getexception_mail:${MAIL_PASSWORD}@postgres:5432/getexception
+      MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run the production installer}
+      SMTP_HOST: ${SMTP_HOST:?Configure SMTP}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_MODE: ${SMTP_MODE:-starttls}
+      SMTP_FROM: ${SMTP_FROM:?Configure sender}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    networks: [database, mail]
+    healthcheck:
+      <<: *health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3003/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?Configure certificate email}
+      DASHBOARD_HOST: ${DASHBOARD_HOST:?Configure dashboard domain}
+      INGEST_HOST: ${INGEST_HOST:?Configure ingest domain}
+    volumes:
+      [
+        ./Caddyfile:/etc/caddy/Caddyfile:ro,
+        caddy-data:/data,
+        caddy-config:/config,
+      ]
+    networks: [edge, dashboard, ingestion]
+    depends_on:
+      web: { condition: service_healthy }
+      ingest: { condition: service_healthy }
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+networks:
+  edge: {}
+  dashboard: { internal: true }
+  ingestion: { internal: true }
+  database: { internal: true }
+  mail: {}
+volumes:
+  postgres-data: {}
+  caddy-data: {}
+  caddy-config: {}

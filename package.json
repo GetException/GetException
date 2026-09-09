@@ -9,17 +9,60 @@
     "fixtures/*"
   ],
   "scripts": {
-    "format": "prettier --write .",
+    "format": "yarn lint:fix && prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "checks": "yarn format:check && yarn lint"
+    "checks": "yarn format:check && yarn lint && yarn architecture && yarn release:check && yarn npm audit --all --recursive --severity critical && yarn typecheck && yarn test && yarn build && yarn test:alias && yarn test:integration && yarn test:compose --if-available --built",
+    "generate": "prisma generate && prisma generate --schema packages/db/prisma/ingest.prisma",
+    "typecheck": "yarn generate && tsc --noEmit && yarn workspace @getexception/web typecheck",
+    "architecture": "tsx scripts/architecture.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "build": "tsx scripts/build.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "compose:check": "docker compose config --quiet",
+    "local:env": "tsx scripts/local-env.ts",
+    "db:migrate": "prisma migrate deploy",
+    "test:alias": "tsx scripts/alias-smoke.ts",
+    "migrate:run": "yarn db:migrate && tsx scripts/bootstrap-seed.ts",
+    "dev:web": "tsx apps/web/src/server/start.ts",
+    "dev:ingest": "tsx apps/ingest/src/main.ts",
+    "dev:worker": "tsx apps/worker/src/main.ts",
+    "local:start": "tsx scripts/local-preview.ts",
+    "local:mailpit": "tsx scripts/install-mailpit.ts",
+    "local:stop": "tsx scripts/local-preview.ts stop",
+    "lint:fix": "eslint . --fix",
+    "ci:tools": "python3 scripts/release/install-tools.py",
+    "release:check": "python3 scripts/release/check.py",
+    "release:packages": "tsx scripts/release/registry.ts --publish",
+    "release:registry-smoke": "tsx scripts/release/registry.ts",
+    "test:deployment": "python3 -m unittest discover -s tests/deployment -p 'test_*.py'",
+    "test:compose": "python3 scripts/release/docker-smoke.py --build"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@playwright/test": "1.63.0",
+    "@stylistic/eslint-plugin": "5.10.0",
+    "@types/node": "24.4.0",
+    "@types/nodemailer": "8.0.1",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "embedded-postgres": "17.9.0-beta.16",
     "eslint": "9.39.5",
     "eslint-config-prettier": "10.1.8",
     "prettier": "3.9.6",
+    "prisma": "7.10.0",
+    "tsup": "8.5.1",
+    "tsx": "4.23.13",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.69.0"
-  }
+    "typescript-eslint": "8.69.0",
+    "vite": "7.3.1",
+    "vitest": "5.0.0"
+  },
+  "type": "module",
+  "engines": {
+    "node": "24.4.0"
+  },
+  "license": "Elastic-2.0"
 }

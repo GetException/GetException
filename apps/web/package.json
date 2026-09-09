@@ -1,0 +1,38 @@
+{
+  "name": "@getexception/web",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@base-ui/react": "1.8.0",
+    "@better-auth/core": "1.6.23",
+    "@better-auth/utils": "0.4.2",
+    "@better-fetch/fetch": "1.3.1",
+    "@getexception/config": "workspace:*",
+    "@getexception/db": "workspace:*",
+    "@getexception/mail": "workspace:*",
+    "@getexception/protocol": "workspace:*",
+    "argon2": "0.44.0",
+    "better-auth": "1.6.23",
+    "better-call": "1.3.7",
+    "jose": "6.2.12",
+    "kysely": "0.29.5",
+    "nanostores": "1.5.3",
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "tailwindcss": "4.3.3"
+  },
+  "scripts": {
+    "build": "next build --webpack",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/start.js"
+  },
+  "license": "Elastic-2.0"
+}

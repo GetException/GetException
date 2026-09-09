@@ -1,0 +1,38 @@
+{
+  "actionlint": {
+    "repository": "rhysd/actionlint",
+    "version": "1.7.12",
+    "darwin": [
+      "amd64",
+      "5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644"
+    ],
+    "linux": [
+      "amd64",
+      "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+    ]
+  },
+  "gitleaks": {
+    "repository": "gitleaks/gitleaks",
+    "version": "8.30.1",
+    "darwin": [
+      "x64",
+      "dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709"
+    ],
+    "linux": [
+      "x64",
+      "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    ]
+  },
+  "grype": {
+    "repository": "anchore/grype",
+    "version": "0.118.0",
+    "darwin": [
+      "amd64",
+      "cfeecf3462321c37ec4bd37dcd8a7f6630cc6c0c9997a07ff34002c5d7ef9bb3"
+    ],
+    "linux": [
+      "amd64",
+      "1d444c5e7360471815f7158f71935fcecc68a3c417d85c7344f770854300bba2"
+    ]
+  }
+}

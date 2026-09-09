@@ -1,0 +1,192 @@
+"""Isolated Linux Docker test. Never uses runtime/local or the developer's database."""
+import argparse
+import importlib.util
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "deploy"))
+import getexception as installer
+
+spec = importlib.util.spec_from_file_location("bundle", ROOT / "scripts/release/bundle.py")
+bundle = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bundle)
+
+
+def run(args, **kwargs):
+    subprocess.run(args, check=True, **kwargs)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--build", action="store_true")
+    group.add_argument("--published")
+    parser.add_argument("--if-available", action="store_true")
+    parser.add_argument("--built", action="store_true")
+    args = parser.parse_args()
+    if sys.platform != "linux" or not shutil.which("docker"):
+        if args.if_available and not os.environ.get("CI"):
+            print("Linux Docker test is skipped locally; it is mandatory in CI.")
+            return
+        raise RuntimeError("Run this test on Linux with Docker Compose")
+    os.umask(0o077)
+    project = "getexception-ci-" + secrets.token_hex(6)
+    Path(".artifacts").mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="docker-test-", dir=ROOT / ".artifacts") as temporary:
+        work = Path(temporary).resolve()
+        root = work / "installation"
+        images = {}
+        names = ["web", "ingest", "worker", "mail", "migrate"]
+        sha = args.published or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        env = {**os.environ, "SMTP_HOST": "smtp.example.com", "SMTP_FROM": "monitor@example.com",
+               "ACME_EMAIL": "admin@example.com"}
+        options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
+        if args.build:
+            if not args.built:
+                run(["corepack", "yarn", "generate"])
+                run(["corepack", "yarn", "build"])
+            for name in names:
+                images[name] = "getexception-ci-" + name + ":" + sha
+                run(["docker", "build", "--file", "docker/Dockerfile", "--target", name,
+                     "--tag", images[name], "."])
+            fake = {name: "ghcr.io/getexception/getexception-" + name + "@sha256:" + secrets.token_hex(32) for name in names}
+            bundle.build_bundle(sha, fake, work / "bundle")
+            release = root / "releases" / sha
+            release.mkdir(parents=True)
+            (root / "runtime").mkdir()
+            installer.extract_archive(work / "bundle/getexception.tar.gz", release)
+            from unittest.mock import patch
+            with patch.dict(os.environ, env):
+                installer.configure(root, options)
+            fixture_root = ROOT / "fixtures"
+        else:
+            run(["gh", "release", "download", "deploy-" + sha, "--repo", installer.REPOSITORY,
+                 "--pattern", "install-getexception.sh", "--dir", str(work)])
+            run(["gh", "attestation", "verify", str(work / "install-getexception.sh"), "--repo", installer.REPOSITORY,
+                 "--signer-workflow", installer.WORKFLOW, "--source-ref", "refs/heads/stable", "--source-digest", sha])
+            install_args = ["bash", str(work / "install-getexception.sh"), "--release", sha,
+                            "--install-dir", str(root), "--skip-start", "--dashboard-host", "monitor.example.com",
+                            "--ingest-host", "ingest.example.com"]
+            run(install_args, env=env)
+            before = (root / "runtime/.env").read_bytes()
+            run(install_args, env=env)
+            if (root / "runtime/.env").read_bytes() != before:
+                raise RuntimeError("Published bootstrap replaced existing configuration")
+            release = root / "releases" / sha
+            images = installer.metadata(release)["images"]
+            fixture_root = ROOT / ".artifacts/registry"
+
+        # Keep the verified bundle unchanged. Only this test override enables local TLS and Mailpit.
+        caddy = (release / "Caddyfile").read_text().replace("{$DASHBOARD_HOST} {", "{$DASHBOARD_HOST} {\n\ttls internal")
+        caddy = caddy.replace("{$INGEST_HOST} {", "{$INGEST_HOST} {\n\ttls internal")
+        for name in ["browser", "react"]:
+            caddy += f"\n{name}.monitor.localhost {{\n\ttls internal\n\troot * /srv/{name}\n\tfile_server\n}}\n"
+        (work / "Caddyfile.test").write_text(caddy)
+        os.chmod(work / "Caddyfile.test", 0o644)
+        override = {"services": {
+            "web": {"environment": {"DASHBOARD_ORIGIN": "https://monitor.localhost", "INGEST_ORIGIN": "https://ingest.monitor.localhost"}},
+            "ingest": {"environment": {"INGEST_ORIGIN": "https://ingest.monitor.localhost"}},
+            "worker-mail": {"environment": {"SMTP_HOST": "mailpit", "SMTP_PORT": "1025", "SMTP_MODE": "local"}},
+            "mailpit": {"image": "axllent/mailpit:v1.31.1", "networks": ["mail"]},
+            "caddy": {"environment": {"DASHBOARD_HOST": "monitor.localhost", "INGEST_HOST": "ingest.monitor.localhost"},
+                      "volumes": [str(work / "Caddyfile.test") + ":/etc/caddy/Caddyfile:ro",
+                                  str(fixture_root / "browser-spa/dist") + ":/srv/browser:ro",
+                                  str(fixture_root / "react-spa/dist") + ":/srv/react:ro"]}}}
+        (work / "override.json").write_text(json.dumps(override))
+        image_env = work / "images.env"
+        image_env.write_text(installer.env_text({name.upper() + "_IMAGE": reference for name, reference in images.items()}))
+
+        class DockerInstallation(installer.Installation):
+            def compose(self, target, *arguments, stdout=subprocess.PIPE):
+                # Local build tags are available only in this isolated test, never in the production controller.
+                if arguments == ("pull",) and args.build:
+                    return ""
+                return installer.run(["docker", "compose", "-p", project, "--env-file", str(root / "runtime/.env"),
+                                      "--env-file", str(image_env), "-f", str(target / "compose.yaml"),
+                                      "-f", str(work / "override.json"), *arguments], stdout=stdout)
+
+            def smoke(self, target):
+                # This test uses a local CA; production smoke never disables certificate verification.
+                for host, path, expected in [("monitor.localhost", "/login", "200"),
+                                             ("monitor.localhost", "/health/ready", "404"),
+                                             ("ingest.monitor.localhost", "/api/dashboard/status", "404")]:
+                    for attempt in range(20):
+                        result = subprocess.run(["curl", "--insecure", "--silent", "--location", "--max-time", "5",
+                                                 "--resolve", host + ":443:127.0.0.1", "--output", "/dev/null",
+                                                 "--write-out", "%{http_code}", "https://" + host + path], capture_output=True, text=True)
+                        if result.returncode == 0 and result.stdout == expected:
+                            break
+                        if attempt == 19:
+                            raise installer.Failure("Test HTTPS route failed")
+                        time.sleep(1)
+                self.compose(target, "exec", "-T", "web", "node", "-e",
+                             "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1))")
+
+        installation = DockerInstallation(root)
+        try:
+            installation.compose(release, "up", "-d", "mailpit")
+            installation.deploy(release, first=True)
+            test_env = {**os.environ, "DEPLOYMENT_TEST_DIR": str(root), "DEPLOYMENT_TEST_PROJECT": project}
+            run(["corepack", "yarn", "playwright", "test", "--config", "playwright.deployment.config.ts"], env=test_env)
+            query = 'SELECT (SELECT count(*) FROM "user"), (SELECT count(*) FROM member), (SELECT count(*) FROM project), (SELECT count(*) FROM error_event)'
+            before = ""
+            for attempt in range(20):
+                before = installation.compose(release, "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "getexception", "-Atc", query)
+                if before == "1|1|1|5":
+                    break
+                time.sleep(1)
+            if before != "1|1|1|5":
+                raise RuntimeError("Expected one Owner/project and five processed SDK events")
+            grouped = installation.compose(release, "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "getexception", "-Atc",
+                                           'SELECT count(*), max("eventCount") FROM issue')
+            if grouped != "4|2":
+                raise RuntimeError("Repeated SDK errors were not grouped")
+            config_before = (root / "runtime/.env").read_bytes()
+            # Exercise real update + compatible rollback using another release identity and the same tested images.
+            candidate = root / "releases" / secrets.token_hex(20)
+            shutil.copytree(release, candidate)
+            info = installer.metadata(candidate)
+            info["sha"] = candidate.name
+            installer.write_json(candidate / "release.json", info)
+            installation.deploy(candidate)
+            installation.rollback()
+            after = installation.compose(release, "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "getexception", "-Atc", query)
+            if before != after or config_before != (root / "runtime/.env").read_bytes():
+                raise RuntimeError("Update/rollback changed persistent accounts, events or configuration")
+            run(["corepack", "yarn", "playwright", "test", "--config", "playwright.deployment.config.ts"],
+                env={**test_env, "DEPLOYMENT_VERIFY_RESTART": "1"})
+            # Verify the generated backup is a readable PostgreSQL archive.
+            backup = next((root / "runtime/backups").glob("*.dump"))
+            with backup.open("rb") as stream:
+                result = subprocess.run(["docker", "compose", "-p", project, "--env-file", str(root / "runtime/.env"),
+                                         "--env-file", str(image_env), "-f", str(release / "compose.yaml"), "exec", "-T",
+                                         "postgres", "pg_restore", "--list"], stdin=stream, stdout=subprocess.DEVNULL)
+                if result.returncode:
+                    raise RuntimeError("Deployment backup cannot be read by pg_restore")
+            installation.compose(release, "exec", "-T", "postgres", "createdb", "-U", "postgres", "getexception_restore_test")
+            with backup.open("rb") as stream:
+                restored = subprocess.run(["docker", "compose", "-p", project, "--env-file", str(root / "runtime/.env"),
+                                          "--env-file", str(image_env), "-f", str(release / "compose.yaml"), "exec", "-T",
+                                          "postgres", "pg_restore", "-U", "postgres", "--exit-on-error", "--clean", "--if-exists", "-d", "getexception_restore_test"],
+                                         stdin=stream, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                if restored.returncode:
+                    raise RuntimeError("Backup restore into a clean database failed")
+            restored_counts = installation.compose(release, "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "getexception_restore_test", "-Atc", query)
+            if restored_counts != before:
+                raise RuntimeError("Restored database differs from the pre-upgrade backup")
+        finally:
+            # The project name is generated above, never the developer or production Compose project.
+            installation.compose(release, "down", "--volumes", "--remove-orphans")
+    print("Docker bootstrap, published SDK events, update and rollback passed.")
+
+
+if __name__ == "__main__":
+    main()

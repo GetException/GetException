@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GetException browser fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>Browser SPA fixture</h1>
+      <p>Connect a write-only DSN, then send a test error.</p>
+      <label>DSN <input id="dsn" type="password" autocomplete="off" /></label
+      ><button id="connect">Connect</button
+      ><button id="handled">Handled error</button
+      ><button id="unhandled">Unhandled error</button
+      ><button id="rejection">Unhandled rejection</button>
+      <p id="status" role="status"></p>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "@getexception/browser-spa",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@getexception/browser": "workspace:*"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1"
+  },
+  "license": "Elastic-2.0"
+}

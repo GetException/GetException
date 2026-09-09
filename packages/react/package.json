@@ -1,0 +1,38 @@
+{
+  "name": "@getexception/react",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@getexception/browser": "workspace:*",
+    "@getexception/sentry-react": "npm:@sentry/react@10.73.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "react": "19.2.8"
+  },
+  "peerDependencies": {
+    "react": "^19.2.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GetException/GetException.git",
+    "directory": "packages/react"
+  }
+}

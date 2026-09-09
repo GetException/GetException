@@ -141,3 +141,14 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# GetException generated/runtime files
+packages/db/generated/
+test-results/
+playwright-report/
+.artifacts/
+runtime/
+.npmrc
+
+packages/db/generated-ingest/
+__pycache__/

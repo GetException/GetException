@@ -1,0 +1,259 @@
+name: Release
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full SHA of the prepared release commit on stable
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: getexception-release
+  cancel-in-progress: false
+jobs:
+  prepare-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Reject stale, unprepared or mismatched releases
+        env:
+          REQUESTED_SHA: ${{ inputs.release_sha }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          test "$EVENT_REF" = refs/heads/stable
+          test "$REQUESTED_SHA" = "$EVENT_SHA"
+          test "$(git ls-remote origin refs/heads/stable | cut -f1)" = "$EVENT_SHA"
+          git log -1 --format=%B | grep -Eq '^Release-Source: [a-f0-9]{40}$'
+  checks:
+    needs: prepare-release
+    uses: ./.github/workflows/checks.yml
+  build-images:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [web, ingest, worker, mail, migrate]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - run: python3 scripts/release/check-head.py
+      - name: Reuse an already published SHA
+        id: existing
+        env:
+          TARGET: ${{ matrix.target }}
+          RELEASE_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release/image-reference.py
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        id: image
+        if: steps.existing.outputs.digest == ''
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: |
+            ghcr.io/getexception/getexception-${{ matrix.target }}:sha-${{ github.sha }}
+            ghcr.io/getexception/getexception-${{ matrix.target }}:stable
+          labels: org.opencontainers.image.source=https://github.com/GetException/GetException
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+      - run: python3 scripts/release/install-tools.py grype
+      - name: Reject critical runtime image vulnerabilities
+        env:
+          IMAGE: ghcr.io/getexception/getexception-${{ matrix.target }}@${{ steps.existing.outputs.digest || steps.image.outputs.digest }}
+        run: .artifacts/tools/grype "registry:$IMAGE" --fail-on critical
+      - name: Record immutable image reference
+        env:
+          TARGET: ${{ matrix.target }}
+          DIGEST: ${{ steps.existing.outputs.digest || steps.image.outputs.digest }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          name = os.environ['TARGET']
+          Path('image-' + name + '.json').write_text(json.dumps({name: 'ghcr.io/getexception/getexception-' + name + '@' + os.environ['DIGEST']}))
+          PYTHON
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: image-${{ matrix.target }}
+          path: image-*.json
+          retention-days: 7
+  publish-packages:
+    needs: [checks, build-images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn generate && yarn build
+      - run: python3 scripts/release/check-head.py
+      - name: Publish absent SDK versions with provenance and verify existing versions
+        run: yarn release:packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          YARN_NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          YARN_NPM_PUBLISH_REGISTRY: https://registry.npmjs.org
+  publish-bootstrap:
+    needs: [build-images, publish-packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: image-*
+          path: .artifacts/images
+          merge-multiple: true
+      - name: Assemble release manifest and bootstrap
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+          images = {}
+          for path in Path('.artifacts/images').glob('image-*.json'):
+              images.update(json.loads(path.read_text()))
+          Path('.artifacts/images.json').write_text(json.dumps(images))
+          PYTHON
+          python3 scripts/release/bundle.py --sha "$RELEASE_SHA" --images .artifacts/images.json
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            .artifacts/release/getexception.tar.gz
+            .artifacts/release/getexception.py
+            .artifacts/release/install-getexception.sh
+      - run: python3 scripts/release/check-head.py
+      - name: Publish prerelease assets without replacing an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: python3 scripts/release/publish-bootstrap.py
+  registry-smoke:
+    needs: publish-packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn generate && yarn build
+      - run: yarn release:registry-smoke
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: registry-fixtures
+          path: |
+            .artifacts/registry/browser-spa/dist
+            .artifacts/registry/react-spa/dist
+          retention-days: 3
+  bootstrap-e2e:
+    needs: [publish-bootstrap, registry-smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      attestations: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - run: corepack enable
+      - run: yarn install --immutable
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: registry-fixtures
+          path: .artifacts/registry
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - run: yarn playwright install --with-deps chromium
+      - name: Test the published installer, setup, SDKs and persistent data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: python3 scripts/release/docker-smoke.py --published "$RELEASE_SHA"
+  promote-release:
+    needs: [bootstrap-e2e, registry-smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Mark the verified prerelease ready for installation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: gh release edit "deploy-$RELEASE_SHA" --prerelease=false --latest
+  deploy:
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    needs: [promote-release, bootstrap-e2e, registry-smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release/check-head.py
+      - name: Update the existing server and verify event processing
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: python3 scripts/release/ssh-deploy.py

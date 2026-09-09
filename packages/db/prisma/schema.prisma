@@ -1,0 +1,378 @@
+generator client {
+  provider = "prisma-client"
+  previewFeatures = ["views"]
+  output   = "../generated"
+}
+datasource db {
+  provider = "postgresql"
+}
+model SystemSetting {
+  id Int @id @default(1)
+  domain String
+  setupCompletedAt DateTime @default(now()) @db.Timestamptz(3)
+  schemaVersion Int @default(1)
+  @@map("system_setting")
+}
+model BootstrapToken {
+  id Int @id @default(1)
+  tokenHash String
+  expiresAt DateTime @db.Timestamptz(3)
+  @@map("bootstrap_token")
+}
+model SetupSession {
+  id String @id
+  tokenHash String @unique
+  userId String @unique
+  domain String
+  email String
+  passwordHash String
+  pendingCiphertext String
+  expiresAt DateTime @db.Timestamptz(3)
+  @@map("setup_session")
+}
+// Better Auth User is the domain Account; Account below is its password credential.
+model User {
+  id String @id
+  name String
+  email String @unique
+  emailVerified Boolean @default(false)
+  image String?
+  twoFactorEnabled Boolean @default(false)
+  disabled Boolean @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  accounts Account[]
+  sessions Session[]
+  members Member[]
+  credentials MfaCredential[]
+  recoveryCodes RecoveryCode[]
+  @@map("user")
+}
+model Account {
+  id String @id
+  accountId String
+  providerId String
+  userId String
+  password String?
+  accessToken String?
+  refreshToken String?
+  idToken String?
+  accessTokenExpiresAt DateTime? @db.Timestamptz(3)
+  refreshTokenExpiresAt DateTime? @db.Timestamptz(3)
+  scope String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("auth_account")
+}
+model Session {
+  id String @id
+  token String @unique
+  userId String
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  ipAddress String?
+  userAgent String?
+  activeOrganizationId String?
+  activeTeamId String?
+  mfaVerifiedAt DateTime? @db.Timestamptz(3)
+  mfaMethod String?
+  lastSeenAt DateTime @default(now()) @db.Timestamptz(3)
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  @@index([userId])
+  @@map("session")
+}
+model Verification {
+  id String @id
+  identifier String
+  value String
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@index([identifier])
+  @@map("verification")
+}
+model Organization {
+  id String @id
+  singleton Int @unique @default(1)
+  name String
+  slug String @unique
+  logo String?
+  metadata String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  members Member[]
+  teams Team[]
+  projects Project[]
+  @@map("workspace")
+}
+model Member {
+  id String @id
+  organizationId String
+  userId String
+  role String @default("viewer")
+  active Boolean @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  organization Organization @relation(fields:[organizationId], references:[id], onDelete:Cascade)
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  teams TeamMember[]
+  @@unique([organizationId,userId])
+  @@map("member")
+}
+model Team {
+  id String @id
+  organizationId String
+  name String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+  members TeamMember[]
+  projects ProjectTeam[]
+  @@map("team")
+}
+model TeamMember {
+  id String @id
+  teamId String
+  userId String
+  memberId String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  team Team @relation(fields:[teamId],references:[id],onDelete:Cascade)
+  member Member @relation(fields:[memberId],references:[id],onDelete:Cascade)
+  @@unique([teamId,memberId])
+  @@map("team_member")
+}
+model MfaCredential {
+  id String @id
+  userId String
+  state String
+  ciphertext String
+  lastCounter BigInt @default(-1)
+  expiresAt DateTime? @db.Timestamptz(3)
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  @@unique([userId,state])
+  @@map("mfa_credential")
+}
+model Invitation {
+  id String @id
+  organizationId String
+  inviterId String
+  email String
+  role String
+  status String @default("pending")
+  tokenHash String? @unique
+  revision Int @default(1)
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  acceptedAt DateTime? @db.Timestamptz(3)
+  teams InvitationTeam[]
+  verifications InvitationVerification[]
+  mail MailOutbox[]
+  @@index([organizationId, createdAt])
+  @@map("invitation")
+}
+model InvitationTeam {
+  invitationId String
+  teamId String
+  invitation Invitation @relation(fields:[invitationId], references:[id], onDelete:Cascade)
+  @@id([invitationId,teamId])
+  @@map("invitation_team")
+}
+model InvitationVerification {
+  id String @id
+  invitationId String
+  revision Int
+  tokenHash String? @unique
+  expiresAt DateTime @db.Timestamptz(3)
+  registrationHash String? @unique
+  registrationExpiresAt DateTime? @db.Timestamptz(3)
+  invitation Invitation @relation(fields:[invitationId], references:[id], onDelete:Cascade)
+  @@index([invitationId])
+  @@map("invitation_verification")
+}
+model MailOutbox {
+  id String @id
+  invitationId String
+  kind String
+  revision Int @default(1)
+  payload String?
+  status String @default("pending")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime @db.Timestamptz(3)
+  leaseToken String?
+  leaseUntil DateTime? @db.Timestamptz(3)
+  lastError String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  sentAt DateTime? @db.Timestamptz(3)
+  invitation Invitation @relation(fields:[invitationId], references:[id], onDelete:Cascade)
+  @@unique([invitationId,kind])
+  @@index([status,nextAttemptAt])
+  @@map("mail_outbox")
+}
+model RecoveryCode {
+  id String @id
+  userId String
+  codeHash String @unique
+  usedAt DateTime? @db.Timestamptz(3)
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  @@index([userId])
+  @@map("recovery_code")
+}
+model AuthRateBucket {
+  id String @id
+  hits Int @default(1)
+  expiresAt DateTime @db.Timestamptz(3)
+  @@index([expiresAt])
+  @@map("auth_rate_bucket")
+}
+model AuditLog {
+  id String @id
+  action String
+  success Boolean
+  actorId String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([createdAt])
+  @@map("audit_log")
+}
+model Project {
+  id String @id @default(uuid())
+  organizationId String
+  name String
+  slug String
+  enabled Boolean @default(true)
+  dailyQuota Int @default(25000)
+  allowedTags String[] @default(["feature","component","operation"])
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+  teams ProjectTeam[]
+  origins ProjectOrigin[]
+  keys ProjectIngestionKey[]
+  inbox EventInbox[]
+  issues Issue[]
+  events ErrorEvent[]
+  releases Release[]
+  stats ProjectDailyStat[]
+  @@unique([organizationId,slug])
+  @@map("project")
+}
+model ProjectTeam {
+  projectId String
+  teamId String
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  team Team @relation(fields:[teamId],references:[id],onDelete:Cascade)
+  @@id([projectId,teamId])
+  @@map("project_team")
+}
+model ProjectOrigin {
+  projectId String
+  origin String
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  @@id([projectId,origin])
+  @@map("project_origin")
+}
+model ProjectIngestionKey {
+  id String @id @default(uuid())
+  projectId String
+  keyHash String @unique
+  expiresAt DateTime? @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  @@map("project_ingestion_key")
+}
+model EventInbox {
+  id String @id @default(uuid())
+  projectId String?
+  eventId String
+  payload Json
+  receivedAt DateTime @default(now()) @db.Timestamptz(3)
+  status String @default("pending")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now()) @db.Timestamptz(3)
+  leaseUntil DateTime? @db.Timestamptz(3)
+  leaseToken String?
+  lastError String?
+  project Project? @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  @@unique([projectId,eventId])
+  @@index([status,nextAttemptAt])
+  @@index([status,leaseUntil])
+  @@map("event_inbox")
+}
+model Issue {
+  id String @id @default(uuid())
+  projectId String
+  fingerprint String
+  title String
+  exceptionType String
+  status String @default("open")
+  regression Boolean @default(false)
+  eventCount Int @default(0)
+  firstSeen DateTime @db.Timestamptz(3)
+  lastSeen DateTime @db.Timestamptz(3)
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  events ErrorEvent[]
+  @@unique([projectId,fingerprint])
+  @@unique([id,projectId])
+  @@index([projectId,status,lastSeen])
+  @@map("issue")
+}
+model ErrorEvent {
+  id String @id @default(uuid())
+  projectId String
+  eventId String
+  issueId String
+  receivedAt DateTime @db.Timestamptz(3)
+  timestamp DateTime @db.Timestamptz(3)
+  level String
+  message String
+  exceptionType String
+  handled Boolean
+  environment String
+  release String?
+  dist String?
+  route String?
+  frames Json
+  tags Json
+  breadcrumbs Json
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  issue Issue @relation(fields:[issueId,projectId],references:[id,projectId],onDelete:Cascade)
+  @@unique([projectId,eventId])
+  @@index([issueId,receivedAt])
+  @@index([receivedAt])
+  @@map("error_event")
+}
+model Release {
+  id String @id @default(uuid())
+  projectId String
+  name String
+  sourceMapsState String @default("missing")
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  @@unique([projectId,name])
+  @@map("release")
+}
+model ProjectDailyStat {
+  projectId String
+  day DateTime @db.Date
+  accepted Int @default(0)
+  rejected Int @default(0)
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  @@id([projectId,day])
+  @@map("project_daily_stat")
+}
+// Read-only SQL views; generated migrations deliberately exclude their models.
+view IngestionConfig {
+  id String @unique
+  projectId String
+  keyHash String
+  origin String?
+  dailyQuota Int
+  allowedTags String[]
+  @@map("ingestion_config")
+}
+view RuntimeSchema {
+  version Int @unique
+  @@map("runtime_schema")
+}
