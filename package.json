@@ -65,5 +65,9 @@
   "engines": {
     "node": "24.20.0"
   },
-  "license": "Elastic-2.0"
+  "license": "Elastic-2.0",
+  "resolutions": {
+    "@prisma/config/deepmerge-ts": "8.0.2",
+    "prisma/mysql2": "3.23.1"
+  }
 }
