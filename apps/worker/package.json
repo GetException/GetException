@@ -8,7 +8,7 @@
     "@getexception/db": "workspace:*",
     "@getexception/mail": "workspace:*",
     "@getexception/protocol": "workspace:*",
-    "nodemailer": "8.0.11"
+    "nodemailer": "9.1.1"
   },
   "scripts": {
     "build": "tsup",

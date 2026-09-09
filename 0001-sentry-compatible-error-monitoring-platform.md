@@ -1173,6 +1173,8 @@ Docker Compose поднимает PostgreSQL и при необходимост�
 
 Web не открывает HTTP port, а worker не сообщает readiness, если отсутствует обязательный production secret, схема содержит неприменённую миграцию или обязательная зависимость недоступна. Проверка выполняется до приёма пользовательского трафика.
 
+Уточнение состава образов от 2026-09-09: приложения и migrate собираются на закреплённом по digest официальном Node 24 Alpine. Эта база исключает неиспользуемые приложениями Perl, GnuTLS и glibc из прежнего Debian-образа; OpenSSL получает обновления безопасности при сборке. Native-зависимости собираются/устанавливаются для musl в том же build stage. Из конечных образов удалены npm, Corepack и Yarn. Отдельный workspace `apps/migrate` содержит Prisma CLI и запускает миграции и первоначальный seed через скомпилированный Node entry point; тестовые PostgreSQL, Vite, Playwright и остальные devDependencies в migrate не входят. Совместимость проверяется Linux Docker установкой, обновлением и откатом.
+
 ### Контроль состояния самого GetException
 
 Отказ от продуктовых уведомлений об ошибках не отменяет технический контроль сервиса:
@@ -1247,26 +1249,30 @@ GitHub Actions запускает `yarn checks` как единый обязат
 
 ### Push в stable
 
-1. создаётся или переиспользуется автоматический release commit;
-2. версия npm-пакетов повышается предсказуемо;
-3. собираются Docker-образы;
-4. образы публикуются в GHCR с stable и Git SHA;
-5. npm-пакеты публикуются с provenance через GitHub Secret `NPM_TOKEN`;
-6. workflow ждёт появления версии в реальном registry;
-7. опубликованные пакеты устанавливаются в чистые fixture для browser SPA и React SPA;
-8. оба fixture отправляют handled и unhandled ошибки в одноразовый тестовый stack;
-9. проверяются очистка, группировка, релиз и source maps;
-10. проверяется опубликованный bootstrap artifact;
-11. production разворачивается строго по SHA;
-12. запускаются health и ingestion smoke checks.
+Уточнение от 2026-09-09: сервер и SDK выпускаются независимо. Для первого развёртывания публикация SDK откладывается; серверный workflow не использует npm credentials и не повышает версии пакетов. Это позволяет обновлять установку без доступа к npm, сохраняя проверки совместимости SDK в исходниках и тесты установки.
+
+1. `Release` проверяет исходный commit и запускает `yarn checks`;
+2. собираются Docker-образы и публикуются в GHCR с stable и Git SHA;
+3. критические уязвимости образов блокируют продолжение;
+4. публикуется bootstrap artifact с checksums и attestations;
+5. fixture из того же checkout отправляют handled и unhandled ошибки в установленный из опубликованного bundle одноразовый stack;
+6. проверяются настройка Owner, очистка, группировка, обновление, откат и восстановление backup;
+7. проверенный prerelease становится релизом, доступным установщику;
+8. при включённом deploy production обновляется строго по SHA, затем запускаются health и ingestion smoke checks.
 
 Два production deploy не могут идти одновременно. Workflow использует `concurrency` с `cancel-in-progress: false`. Основная ветка и release environment защищены review rules.
 
-Release workflow разделён на jobs `checks`, `prepare-release`, `build-images`, `publish-packages`, `publish-bootstrap`, `registry-smoke`, `bootstrap-e2e` и `deploy`. Каждый job получает только нужные secrets и permissions. `deploy` зависит от успешного завершения всех publish и smoke jobs.
+Серверный workflow разделён на jobs `prepare-release`, `checks`, `build-images`, `publish-bootstrap`, `bootstrap-e2e`, `promote-release` и `deploy`. Каждый job получает только нужные secrets и permissions. `deploy` зависит от успешного завершения серверных publish и smoke jobs. Проверка remote `stable` запрещает выпуск устаревшего commit.
 
-`prepare-release` повторно читает remote `stable` перед публикацией. Если ветка уже перешла на посторонний commit, job завершается без публикации старого кода. Если найден ожидаемый автоматический release commit с `[skip ci]`, workflow повторно использует его и не создаёт цикл release commits.
+### Отдельный выпуск SDK
+
+Ручной `Prepare SDK release` запускает проверки, повышает общую patch-версию SDK и создаёт release commit. После этого он вызывает отдельный `SDK release` на точном SHA. Серверный workflow не зависит от этих jobs; автоматический commit SDK использует `[skip ci]`.
+
+Подготовка SDK повторно читает remote `stable` перед публикацией. Если ветка уже перешла на посторонний commit, job завершается без публикации старого кода. Если найден ожидаемый автоматический release commit с `[skip ci]`, workflow повторно использует его и не создаёт цикл release commits.
 
 `publish-packages` передаёт GitHub Secret `NPM_TOKEN` как `NODE_AUTH_TOKEN` и `YARN_NPM_AUTH_TOKEN` только на время публикации. Job сначала проверяет, существует ли версия в npm, затем публикует отсутствующую версию с provenance. `registry-smoke` ждёт появления версии, скачивает настоящий tarball и устанавливает его в чистые browser SPA и React SPA fixtures.
+
+SDK workflow проверяет эти опубликованные fixtures в одноразовом Docker stack, включая отправку событий. Публикация SDK не создаёт серверный release и не запускает SSH deploy.
 
 `bootstrap-e2e` скачивает installer и bundle из опубликованного GitHub Release в чистую среду. Тест запускает Compose, открывает `/setup`, вводит bootstrap token, создаёт root-пользователя, настраивает TOTP и домен, затем проверяет вход и приём тестового события.
 

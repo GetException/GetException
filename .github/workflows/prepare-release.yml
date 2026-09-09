@@ -1,7 +1,5 @@
-name: Prepare release
+name: Prepare SDK release
 on:
-  push:
-    branches: [stable]
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,7 +30,7 @@ jobs:
       - run: yarn ci:tools
       - run: yarn local:mailpit
       - run: bash scripts/release/install-browser.sh
-      - name: Prepare release commit and dispatch its exact SHA
+      - name: Prepare SDK release commit and dispatch its exact SHA
         run: python3 scripts/release/prepare.py
         env:
           SOURCE_SHA: ${{ github.sha }}

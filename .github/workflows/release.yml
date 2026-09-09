@@ -1,10 +1,12 @@
 name: Release
 on:
+  push:
+    branches: [stable]
   workflow_dispatch:
     inputs:
       release_sha:
-        description: Full SHA of the prepared release commit on stable
-        required: true
+        description: Exact stable SHA to retry (optional)
+        required: false
         type: string
 permissions:
   contents: read
@@ -20,16 +22,15 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
-      - name: Reject stale, unprepared or mismatched releases
+      - name: Reject stale or mismatched releases
         env:
-          REQUESTED_SHA: ${{ inputs.release_sha }}
+          REQUESTED_SHA: ${{ inputs.release_sha || github.sha }}
           EVENT_SHA: ${{ github.sha }}
           EVENT_REF: ${{ github.ref }}
         run: |
           test "$EVENT_REF" = refs/heads/stable
           test "$REQUESTED_SHA" = "$EVENT_SHA"
           test "$(git ls-remote origin refs/heads/stable | cut -f1)" = "$EVENT_SHA"
-          git log -1 --format=%B | grep -Eq '^Release-Source: [a-f0-9]{40}$'
   checks:
     needs: prepare-release
     uses: ./.github/workflows/checks.yml
@@ -83,7 +84,14 @@ jobs:
       - name: Reject critical runtime image vulnerabilities
         env:
           IMAGE: ghcr.io/getexception/getexception-${{ matrix.target }}@${{ steps.existing.outputs.digest || steps.image.outputs.digest }}
-        run: .artifacts/tools/grype "registry:$IMAGE" --fail-on critical
+          TARGET: ${{ matrix.target }}
+        run: .artifacts/tools/grype "registry:$IMAGE" --fail-on critical --output json --file ".artifacts/grype-$TARGET.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ always() }}
+        with:
+          name: vulnerabilities-${{ matrix.target }}
+          path: .artifacts/grype-*.json
+          retention-days: 7
       - name: Record immutable image reference
         env:
           TARGET: ${{ matrix.target }}
@@ -100,33 +108,8 @@ jobs:
           name: image-${{ matrix.target }}
           path: image-*.json
           retention-days: 7
-  publish-packages:
-    needs: [checks, build-images]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    environment: release
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version-file: .nvmrc
-      - run: corepack enable
-      - run: yarn install --immutable
-      - run: yarn generate && yarn build
-      - run: python3 scripts/release/check-head.py
-      - name: Publish absent SDK versions with provenance and verify existing versions
-        run: yarn release:packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          YARN_NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          YARN_NPM_PUBLISH_REGISTRY: https://registry.npmjs.org
   publish-bootstrap:
-    needs: [build-images, publish-packages]
+    needs: build-images
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -167,30 +150,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
         run: python3 scripts/release/publish-bootstrap.py
-  registry-smoke:
-    needs: publish-packages
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version-file: .nvmrc
-      - run: corepack enable
-      - run: yarn install --immutable
-      - run: yarn generate && yarn build
-      - run: yarn release:registry-smoke
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: registry-fixtures
-          path: |
-            .artifacts/registry/browser-spa/dist
-            .artifacts/registry/react-spa/dist
-          retention-days: 3
   bootstrap-e2e:
-    needs: [publish-bootstrap, registry-smoke]
+    needs: publish-bootstrap
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -206,23 +167,20 @@ jobs:
           node-version-file: .nvmrc
       - run: corepack enable
       - run: yarn install --immutable
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: registry-fixtures
-          path: .artifacts/registry
+      - run: yarn generate && yarn build
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - run: bash scripts/release/install-browser.sh
-      - name: Test the published installer, setup, SDKs and persistent data
+      - name: Test the published installer, setup, event ingestion and persistent data
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
         run: python3 scripts/release/docker-smoke.py --published "$RELEASE_SHA"
   promote-release:
-    needs: [bootstrap-e2e, registry-smoke]
+    needs: bootstrap-e2e
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -236,7 +194,7 @@ jobs:
         run: gh release edit "deploy-$RELEASE_SHA" --prerelease=false --latest
   deploy:
     if: ${{ vars.DEPLOY_ENABLED == 'true' }}
-    needs: [promote-release, bootstrap-e2e, registry-smoke]
+    needs: promote-release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: production

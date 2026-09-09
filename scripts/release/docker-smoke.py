@@ -45,6 +45,7 @@ def main():
     group.add_argument("--published")
     parser.add_argument("--if-available", action="store_true")
     parser.add_argument("--built", action="store_true")
+    parser.add_argument("--registry-fixtures", action="store_true", help="Use fixtures installed from published npm packages")
     args = parser.parse_args()
     if sys.platform != "linux" or not shutil.which("docker"):
         if args.if_available and not os.environ.get("CI"):
@@ -80,7 +81,6 @@ def main():
             from unittest.mock import patch
             with patch.dict(os.environ, env):
                 installer.configure(root, options)
-            fixture_root = ROOT / "fixtures"
         else:
             run(["gh", "release", "download", "deploy-" + sha, "--repo", installer.REPOSITORY,
                  "--pattern", "install-getexception.sh", "--dir", str(work)])
@@ -96,7 +96,11 @@ def main():
                 raise RuntimeError("Published bootstrap replaced existing configuration")
             release = root / "releases" / sha
             images = installer.metadata(release)["images"]
-            fixture_root = ROOT / ".artifacts/registry"
+
+        fixture_root = ROOT / (".artifacts/registry" if args.registry_fixtures else "fixtures")
+        for name in ["browser", "react"]:
+            if not (fixture_root / (name + "-spa/dist/index.html")).is_file():
+                raise RuntimeError("Build the browser/React fixtures before testing the installer")
 
         # Keep the verified bundle unchanged. Only this test override enables local TLS and Mailpit.
         caddy = (release / "Caddyfile").read_text().replace("{$DASHBOARD_HOST} {", "{$DASHBOARD_HOST} {\n\ttls internal")
@@ -201,7 +205,7 @@ def main():
         finally:
             # The project name is generated above, never the developer or production Compose project.
             installation.compose(release, "down", "--volumes", "--remove-orphans")
-    print("Docker bootstrap, published SDK events, update and rollback passed.")
+    print("Docker bootstrap, event ingestion, update and rollback passed.")
 
 
 if __name__ == "__main__":

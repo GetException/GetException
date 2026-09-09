@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create/reuse one release commit, then dispatch the release at that exact commit."""
+"""Create/reuse an SDK release commit, then dispatch SDK publication at that exact commit."""
 import json
 import os
 from pathlib import Path
@@ -63,5 +63,5 @@ if __name__ == "__main__":
     if run("git", "rev-parse", "origin/stable") != sha:
         raise RuntimeError("stable changed before dispatch")
     # A separate dispatch gives provenance the release commit as GITHUB_SHA.
-    run("gh", "workflow", "run", "release.yml", "--ref", "stable", "-f", "release_sha=" + sha)
+    run("gh", "workflow", "run", "sdk-release.yml", "--ref", "stable", "-f", "release_sha=" + sha)
     print("Release prepared and dispatched: " + sha)

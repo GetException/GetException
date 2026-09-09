@@ -12,6 +12,7 @@ const allowed: Record<string, string[]> = {
   web: ["db", "config", "protocol", "mail"],
   ingest: ["db", "config", "protocol"],
   worker: ["db", "config", "protocol", "mail"],
+  migrate: ["db"],
   "browser-spa": ["browser"],
   "react-spa": ["react"],
 };

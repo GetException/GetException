@@ -23,7 +23,7 @@ await build({
   external: ["react", "@getexception/browser", "@getexception/sentry-react"],
 });
 
-for (const app of ["ingest", "worker"]) {
+for (const app of ["ingest", "worker", "migrate"]) {
   await build({
     entry:
       app === "worker"

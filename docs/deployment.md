@@ -5,13 +5,19 @@
 ## Что происходит после push
 
 1. Pull request в `stable` проходит `Checks`: `yarn checks` (включая Linux Docker тест установки) и аудит зависимостей.
-2. Push в `stable` запускает `Prepare release`. Он повторяет проверки, поднимает patch-версию обоих SDK командой Yarn, выполняет `yarn checks` перед release commit и отправляет commit с `[skip ci]`.
-3. `Prepare release` запускает `Release` через `workflow_dispatch` на этом commit. Это отдельный запуск, чтобы подписи артефактов содержали именно SHA выпущенного кода. Повторная попытка переиспользует уже подготовленный release commit. Если `stable` ушла вперёд, старый код не публикуется.
-4. `Release` собирает Linux amd64 образы web, ingest, worker, mail и migrate, публикует их в GHCR с SHA и `stable`, формирует SBOM и provenance. Критические уязвимости образа блокируют продолжение. Существующий SHA-образ переиспользуется.
-5. Публикуются отсутствующие версии `@getexception/browser` и `@getexception/react` с npm provenance. Уже существующая версия должна совпадать с собранным пакетом. `NPM_TOKEN` получает только шаг публикации.
-6. В GitHub Releases появляется prerelease `deploy-<полный SHA>` с установщиком, bundle, checksums и attestations. Прежние артефакты не перезаписываются.
-7. CI скачивает опубликованные npm tarballs и собирает из них отдельные browser/React fixtures. Другой job скачивает опубликованный установщик, проверяет его attestation и устанавливает временную копию приложения. Тест создаёт Owner с TOTP, проект, отправляет ошибки, проверяет UI, обновление, откат и сохранение сессии/данных. После успеха prerelease становится обычным release.
-8. Если `DEPLOY_ENABLED=true`, после approval environment `production` CI по SSH запускает обновление существующей установки и проверяет приём события. Пока переменная не включена, SSH job пропускается.
+2. Push в `stable` запускает серверный `Release` на исходном SHA. Версии SDK не меняются; `NPM_TOKEN` не требуется. Проверка remote `stable` останавливает выпуск устаревшего commit. Для повторной попытки можно вручную запустить `Release` на `stable`, при необходимости указав точный SHA.
+3. После `yarn checks` собираются Linux amd64 образы web, ingest, worker, mail и migrate; они публикуются в GHCR с SHA и `stable`, SBOM и provenance. Критические уязвимости образов блокируют продолжение. Существующий SHA-образ переиспользуется; отчёты Grype сохраняются в artifacts даже при отказе проверки.
+4. В GitHub Releases появляется prerelease `deploy-<полный SHA>` с установщиком, bundle, checksums и attestations. Прежние артефакты не перезаписываются.
+5. CI собирает browser/React fixtures из этого же checkout, скачивает опубликованный установщик, проверяет attestation и устанавливает временную копию приложения. Тест создаёт Owner с TOTP, проект, отправляет ошибки, проверяет UI, обновление, откат, восстановление backup и сохранение сессии/данных. После успеха prerelease становится обычным release.
+6. Если `DEPLOY_ENABLED=true`, после approval environment `production` CI по SSH обновляет существующую установку и проверяет приём события. Пока переменная не включена, SSH job пропускается.
+
+SDK остаются в исходниках и проходят контрактные/alias-тесты. Публичные npm-пакеты для серверного релиза не нужны.
+
+## Отложенный выпуск SDK
+
+Когда будет настроен npm, вручную запустите `Prepare SDK release` на `stable`. Он повышает patch-версию обоих SDK командой Yarn, выполняет `yarn checks` перед commit с `[skip ci]` и вызывает `SDK release` на точном SHA. Повторная попытка переиспользует подготовленный commit. Этот процесс не запускает серверный deploy.
+
+`SDK release` публикует только отсутствующие версии пакетов с provenance, сверяет состав существующих версий и проверяет скачанные из npm tarballs в browser/React fixtures. Последний job отправляет события этими опубликованными SDK в одноразовую Docker-установку. Только шаг публикации получает `NPM_TOKEN`.
 
 Тег `stable` у Docker-образа служит указателем для человека. Установщик запускает точные digest из проверенного `release.json`. Обновление никогда не выбирает плавающий тег.
 
@@ -24,8 +30,8 @@
 - Основная ветка `stable`; разрешены GitHub Actions и `workflow_dispatch`.
 - Ruleset для `stable`: review, обязательный `Checks / checks`, запрет force push и удаления ветки. Точные названия status checks появляются после первого запуска.
 - Создайте команду `GetException/maintainers` с write access либо замените её в `.github/CODEOWNERS` реальной командой. Включите обязательный review владельцев кода.
-- Создайте environment `release` с независимым approval. Добавьте в него `NPM_TOKEN` с правом публикации только двух SDK. Разрешите GitHub Actions публиковать в npm от имени владельца scope `@getexception`.
-- Для защищённой `stable` задайте repository secret `RELEASE_TOKEN`: fine-grained token отдельного release-оператора с `Contents: write` и `Actions: write`. Его актор должен иметь разрешённый ruleset bypass только для автоматического release commit. Без токена workflow использует `GITHUB_TOKEN`, который обычно не может обойти защиту ветки. Обычные изменения проходят PR/review.
+- Только перед выпуском SDK: создайте environment `release` с независимым approval. Добавьте в него `NPM_TOKEN` с правом публикации только двух SDK. Разрешите GitHub Actions публиковать в npm от имени владельца scope `@getexception`.
+- Только для подготовки SDK на защищённой `stable` задайте repository secret `RELEASE_TOKEN`: fine-grained token отдельного release-оператора с `Contents: write` и `Actions: write`. Его актор должен иметь разрешённый ruleset bypass только для автоматического release commit. Без токена workflow использует `GITHUB_TOKEN`, который обычно не может обойти защиту ветки. Обычные изменения проходят PR/review.
 - Создайте environment `production` с обязательным approval и разрешением только для `stable`. Параллельные выпуски сериализованы через workflow concurrency, на сервере действует дополнительный lock.
 
 Доступ к серверу пока не нужен. Эти параметры добавляются на следующем этапе:

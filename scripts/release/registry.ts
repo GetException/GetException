@@ -131,7 +131,7 @@ if (!publish) {
         "@sentry/react": `npm:@getexception/react@${version}`,
         react: "19.2.8",
         "react-dom": "19.2.8",
-        vite: "7.3.1",
+        vite: "7.3.6",
       },
     }),
   );

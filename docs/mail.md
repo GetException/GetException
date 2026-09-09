@@ -16,7 +16,7 @@ Runner запускает Mailpit и отдельный `worker-mail` автом
 
 Outbox содержит AES-256-GCM ciphertext с отдельным `MAIL_ENCRYPTION_KEY`; AAD связывает сообщение с ID и ревизией. `getexception_mail` имеет только SELECT/UPDATE outbox и SELECT runtime_schema, без доступа к auth, memberships, invitation и событиям. Worker claim использует SKIP LOCKED, lease token и ревизию. Отправка удерживает блокировку актуального сообщения при ограниченном восьмисекундном SMTP I/O. Успех, отмена и окончательный отказ очищают payload. Повторные попытки ограничены пятью; ошибки сохраняются фиксированными кодами. После сбоя между SMTP и commit письмо может прийти повторно, но доступ нельзя принять дважды.
 
-Настройки SMTP доступны только worker-mail; web знает только ключ outbox. SMTP клиент — Nodemailer 8.0.11 (MIT), типы — `@types/nodemailer` 8.0.1. Версия прошла существующий Yarn age gate без обхода quarantine. Настройки транспорта: [официальная документация Nodemailer](https://nodemailer.com/smtp). Локальный catcher Mailpit 1.31.1 (MIT): [параметры запуска](https://mailpit.axllent.org/docs/configuration/runtime-options/).
+Настройки SMTP доступны только worker-mail; web знает только ключ outbox. SMTP клиент — Nodemailer 9.1.1 (MIT), типы — `@types/nodemailer` 8.0.1. Версия прошла существующий Yarn age gate без обхода quarantine. Настройки транспорта: [официальная документация Nodemailer](https://nodemailer.com/smtp). Локальный catcher Mailpit 1.31.1 (MIT): [параметры запуска](https://mailpit.axllent.org/docs/configuration/runtime-options/).
 
 ## Compose и внешний SMTP
 
