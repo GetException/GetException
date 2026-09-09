@@ -32,7 +32,7 @@ def prepare(source):
     version = f"{major}.{minor}.{patch + 1}"
     for name in ["browser", "react"]:
         run("corepack", "yarn", "workspace", "@getexception/" + name, "version", version)
-    run("corepack", "yarn", "install", "--mode=update-lockfile")
+    run("corepack", "yarn", "install", "--no-immutable", "--mode=update-lockfile")
     run("corepack", "yarn", "format")
     # Required before EVERY commit, including the automated release commit.
     subprocess.run(["corepack", "yarn", "checks"], check=True)

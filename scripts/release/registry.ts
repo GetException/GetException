@@ -139,7 +139,7 @@ if (!publish) {
     resolve(root, ".yarnrc.yml"),
     "nodeLinker: node-modules\nenableScripts: false\n",
   );
-  yarn(["install", "--mode=skip-build"], root);
+  yarn(["install", "--no-immutable", "--mode=skip-build"], root);
   yarn(["install", "--immutable", "--mode=skip-build"], root);
   writeFileSync(
     resolve(root, "aliases.mjs"),

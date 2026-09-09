@@ -9,7 +9,8 @@ const sdkVersion = JSON.parse(
   readFileSync("packages/browser/package.json", "utf8"),
 ).version as string;
 const directory = mkdtempSync(join(tmpdir(), "getexception-alias-"));
-const env = { ...process.env };
+// Exercise Yarn's CI defaults during local checks as well.
+const env: NodeJS.ProcessEnv = { ...process.env, CI: "true" };
 
 delete env.NPM_TOKEN;
 delete env.NODE_AUTH_TOKEN;
@@ -143,7 +144,11 @@ try {
     join(directory, ".yarnrc.yml"),
     `nodeLinker: node-modules\nglobalFolder: ${join(directory, ".yarn-global")}\nenableScripts: false\nenableTelemetry: false\nunsafeHttpWhitelist: [127.0.0.1]\nnpmScopes:\n  getexception:\n    npmRegistryServer: ${origin}\n`,
   );
-  await run("corepack", ["yarn", "install", "--mode=skip-build"], directory);
+  await run(
+    "corepack",
+    ["yarn", "install", "--no-immutable", "--mode=skip-build"],
+    directory,
+  );
   await run(
     "corepack",
     ["yarn", "install", "--immutable", "--mode=skip-build"],
