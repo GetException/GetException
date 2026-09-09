@@ -1,6 +1,7 @@
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import secrets
 import unittest
@@ -15,6 +16,26 @@ spec.loader.exec_module(images)
 spec = importlib.util.spec_from_file_location("docker_smoke", path.with_name("docker-smoke.py"))
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
+
+spec = importlib.util.spec_from_file_location("prepare_release", path.with_name("prepare.py"))
+prepare = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(prepare)
+
+
+class ReleaseCommandTests(unittest.TestCase):
+    def test_release_errors_include_the_cause_and_redact_credentials(self):
+        token = secrets.token_urlsafe(24)
+        result = argparse.Namespace(returncode=1, stdout="No ancestor could be found", stderr=" credential=" + token)
+        with patch.dict(os.environ, {"GH_TOKEN": token}), patch.object(prepare.subprocess, "run", return_value=result):
+            with self.assertRaises(RuntimeError) as raised:
+                prepare.run("corepack", "yarn", "version", "0.1.1")
+        self.assertIn("No ancestor could be found", str(raised.exception))
+        self.assertNotIn(token, str(raised.exception))
+
+    def test_release_commands_return_trimmed_stdout(self):
+        result = argparse.Namespace(returncode=0, stdout="release-id\n", stderr="")
+        with patch.object(prepare.subprocess, "run", return_value=result):
+            self.assertEqual(prepare.run("git", "rev-parse", "HEAD"), "release-id")
 
 
 class DockerSmokeTests(unittest.TestCase):

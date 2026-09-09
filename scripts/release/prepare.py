@@ -8,7 +8,15 @@ import subprocess
 
 
 def run(*args):
-    return subprocess.check_output(args, text=True).strip()
+    result = subprocess.run(args, text=True, capture_output=True)
+    if result.returncode:
+        detail = result.stdout + result.stderr
+        for key in ["GH_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN", "YARN_NPM_AUTH_TOKEN"]:
+            token = os.environ.get(key)
+            if token:
+                detail = detail.replace(token, "[REDACTED]")
+        raise RuntimeError(f"Release command {args[0]} exited with {result.returncode}: {detail[-3000:]}")
+    return result.stdout.strip()
 
 
 def prepare(source):
@@ -40,6 +48,10 @@ def prepare(source):
     run("git", "-c", "user.name=github-actions[bot]", "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
         "commit", "-m", "chore: release SDK " + version + " [skip ci]", "-m", marker)
     sha = run("git", "rev-parse", "HEAD")
+    changed = set(run("git", "diff", "--name-only", source + ".." + sha).splitlines())
+    if not changed <= {str(path) for path in manifests} | {"yarn.lock"}:
+        raise RuntimeError("Unexpected files in the automated release commit")
+    run(str(Path(".artifacts/tools/gitleaks").resolve()), "git", "--log-opts=" + source + ".." + sha, "--redact", "--no-banner")
     # A concurrent push fails normally; no force push and no stale release.
     run("git", "push", "origin", "HEAD:stable")
     return sha
