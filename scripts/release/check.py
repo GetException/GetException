@@ -18,7 +18,7 @@ def run(*args, **kwargs):
 
 
 run("python3", "-m", "unittest", "discover", "-s", "tests/deployment", "-p", "test_*.py")
-for path in ["scripts/install-getexception.sh", "docker/init-db.sh"]:
+for path in ["scripts/install-getexception.sh", "scripts/release/install-browser.sh", "docker/init-db.sh"]:
     run("bash", "-n", path)
 for path in Path(".github/workflows").glob("*.yml"):
     for action in re.findall(r"uses:\s*([^\s]+)", path.read_text()):

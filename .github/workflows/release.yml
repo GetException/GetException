@@ -215,7 +215,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - run: yarn playwright install --with-deps chromium
+      - run: bash scripts/release/install-browser.sh
       - name: Test the published installer, setup, SDKs and persistent data
         env:
           GH_TOKEN: ${{ github.token }}
