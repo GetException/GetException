@@ -318,7 +318,7 @@ export function sanitizeEvent(
   return safeEventSchema.parse(out);
 }
 
-export function toSentryEvent(event: SafeEvent) {
+export function toSentryEvent(event: SafeEvent, sdkVersion = "0.1.0") {
   return {
     event_id: event.eventId,
     timestamp: event.timestamp,
@@ -327,7 +327,7 @@ export function toSentryEvent(event: SafeEvent) {
     environment: event.environment,
     release: event.release,
     dist: event.dist,
-    sdk: { name: "getexception.javascript.browser", version: "0.1.0" },
+    sdk: { name: "getexception.javascript.browser", version: sdkVersion },
     exception: {
       values: [
         {
@@ -344,8 +344,8 @@ export function toSentryEvent(event: SafeEvent) {
   };
 }
 
-export function encodeEnvelope(event: SafeEvent): string {
-  const item = JSON.stringify(toSentryEvent(event));
+export function encodeEnvelope(event: SafeEvent, sdkVersion?: string): string {
+  const item = JSON.stringify(toSentryEvent(event, sdkVersion));
 
   return `${JSON.stringify({ event_id: event.eventId })}\n${JSON.stringify({ type: "event", length: new TextEncoder().encode(item).length })}\n${item}`;
 }

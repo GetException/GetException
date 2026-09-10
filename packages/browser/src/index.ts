@@ -1,4 +1,5 @@
 import * as Sentry from "@getexception/sentry-browser";
+import { version } from "../package.json";
 import {
   encodeEnvelope,
   sanitizeBreadcrumb,
@@ -86,7 +87,10 @@ export function init(options?: BrowserOptions): void {
       beforeSend: (event) => {
         try {
           return {
-            ...toSentryEvent(sanitizeEvent(event, event.event_id ?? "")),
+            ...toSentryEvent(
+              sanitizeEvent(event, event.event_id ?? ""),
+              version,
+            ),
             type: undefined,
           };
         } catch {
@@ -113,7 +117,10 @@ export function init(options?: BrowserOptions): void {
               "event_id" in payload
                 ? String(payload.event_id)
                 : "";
-            const body = encodeEnvelope(sanitizeEvent(payload, eventId));
+            const body = encodeEnvelope(
+              sanitizeEvent(payload, eventId),
+              version,
+            );
             const controller = new AbortController();
 
             controllers.add(controller);

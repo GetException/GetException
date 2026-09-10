@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import * as SDK from "../../packages/browser/src/index";
+import { version } from "../../packages/browser/package.json";
 
 afterEach(async () => {
   await SDK.close();
@@ -28,6 +29,10 @@ it("official Sentry capture sends to the original UUID even when it begins with 
   expect(new URL(target).pathname).toBe(`/api/${projectId}/envelope/`);
   expect(String(request.body)).toContain("Real SDK compatibility error");
   expect(String(request.body).split("\n")[0]).not.toContain("dsn");
+  expect(JSON.parse(String(request.body).split("\n")[2]).sdk).toEqual({
+    name: "getexception.javascript.browser",
+    version,
+  });
 });
 
 it("withScope runs before init and preserves exceptions thrown by application code", () => {

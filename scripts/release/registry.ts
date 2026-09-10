@@ -52,6 +52,21 @@ for (const name of names) {
     throw new Error("SDK versions must match");
   }
 
+  const archive = resolve(root, `${name}-expected.tgz`);
+
+  yarn(["workspace", `@getexception/${name}`, "pack", "--out", archive]);
+  const checked = spawnSync(
+    "python3",
+    ["scripts/release/package-check.py", name, "--archive", archive],
+    { stdio: "inherit" },
+  );
+
+  if (checked.status !== 0) {
+    throw new Error("SDK archive review failed before publication");
+  }
+}
+
+for (const name of names) {
   let published = await lookup(name);
 
   if (publish && !published) {
@@ -95,13 +110,6 @@ for (const name of names) {
   }
 
   writeFileSync(resolve(root, `${name}.tgz`), archive);
-  yarn([
-    "workspace",
-    `@getexception/${name}`,
-    "pack",
-    "--out",
-    resolve(root, `${name}-expected.tgz`),
-  ]);
   const compared = spawnSync(
     "python3",
     ["scripts/release/package-check.py", name],
@@ -129,8 +137,8 @@ if (!publish) {
         "@getexception/react": `file:./react.tgz`,
         "@sentry/browser": `npm:@getexception/browser@${version}`,
         "@sentry/react": `npm:@getexception/react@${version}`,
-        react: "19.2.8",
-        "react-dom": "19.2.8",
+        react: "18.3.1",
+        "react-dom": "18.3.1",
         vite: "7.3.6",
       },
     }),

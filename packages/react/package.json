@@ -1,6 +1,7 @@
 {
   "name": "@getexception/react",
   "version": "0.1.1",
+  "description": "GetException error monitoring and ErrorBoundary for React 18 and 19",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
@@ -8,6 +9,7 @@
   },
   "files": [
     "dist",
+    "README.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md"
   ],
@@ -24,11 +26,11 @@
     "@getexception/sentry-react": "npm:@sentry/react@10.73.0"
   },
   "devDependencies": {
-    "@types/react": "19.2.18",
-    "react": "19.2.8"
+    "@types/react": "18.3.31",
+    "react": "18.3.1"
   },
   "peerDependencies": {
-    "react": "^19.2.8"
+    "react": "^18.0.0 || ^19.0.0"
   },
   "repository": {
     "type": "git",

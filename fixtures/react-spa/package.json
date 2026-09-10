@@ -5,15 +5,15 @@
   "private": true,
   "dependencies": {
     "@getexception/react": "workspace:*",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@types/react": "^19",
-    "@types/react-dom": "^19"
+    "@types/react": "^18",
+    "@types/react-dom": "^18"
   },
   "scripts": {
-    "build": "vite build",
+    "build": "tsc --noEmit --jsx react-jsx --module esnext --moduleResolution bundler --target es2022 --strict --skipLibCheck src/main.tsx && vite build",
     "dev": "vite --host 127.0.0.1"
   },
   "license": "Elastic-2.0"

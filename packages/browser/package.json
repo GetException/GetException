@@ -1,6 +1,7 @@
 {
   "name": "@getexception/browser",
   "version": "0.1.1",
+  "description": "Browser error monitoring for self-hosted GetException installations",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
@@ -8,6 +9,7 @@
   },
   "files": [
     "dist",
+    "README.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md"
   ],

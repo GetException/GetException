@@ -51,6 +51,12 @@ for (const name of ["browser", "react"]) {
     "--out",
     join(directory, `${name}.tgz`),
   ]);
+  await run("python3", [
+    "scripts/release/package-check.py",
+    name,
+    "--archive",
+    join(directory, `${name}.tgz`),
+  ]);
 }
 
 let origin = "";
@@ -137,6 +143,7 @@ try {
         "@sentry/browser": `npm:@getexception/browser@${sdkVersion}`,
         "@sentry/react": `npm:@getexception/react@${sdkVersion}`,
         react: "19.2.8",
+        "@types/react": "19.2.18",
       },
     }),
   );
@@ -161,13 +168,14 @@ try {
   await run(process.execPath, ["smoke.mjs"], directory);
   writeFileSync(
     join(directory, "contract.ts"),
-    'import * as Sentry from "@sentry/browser"; import { ErrorBoundary } from "@sentry/react"; Sentry.captureMessage("Error", "fatal"); Sentry.withScope(scope => { scope.setTag("feature", "editor"); scope.setContext("app", { route: "/editor" }); Sentry.captureException(new Error("example")); }); void ErrorBoundary;',
+    'import * as Sentry from "@sentry/browser"; import { ErrorBoundary } from "@sentry/react"; import { createElement } from "react"; Sentry.captureMessage("Error", "fatal"); Sentry.withScope(scope => { scope.setTag("feature", "editor"); scope.setContext("app", { route: "/editor" }); Sentry.captureException(new Error("example")); }); createElement(ErrorBoundary, { fallback: createElement("p", null, "Failed") }, createElement("div", null, "Application"));',
   );
   await run(
     process.execPath,
     [
       resolve("node_modules/typescript/bin/tsc"),
       "--noEmit",
+      "--strict",
       "--skipLibCheck",
       "--moduleResolution",
       "bundler",
