@@ -1,6 +1,6 @@
 {
   "name": "@getexception/react",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "GetException error monitoring and ErrorBoundary for React 18 and 19",
   "type": "module",
   "license": "MIT",
