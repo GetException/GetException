@@ -13,9 +13,11 @@
 
 SDK остаются в исходниках и проходят контрактные/alias-тесты. Публичные npm-пакеты для серверного релиза не нужны.
 
-## Отложенный выпуск SDK
+## Отдельный выпуск SDK
 
-Когда будет настроен npm, вручную запустите `Prepare SDK release` на `stable`. Он повышает patch-версию обоих SDK командой Yarn, выполняет `yarn checks` перед commit с `[skip ci]` и вызывает `SDK release` на точном SHA. Повторная попытка переиспользует подготовленный commit. Этот процесс не запускает серверный deploy.
+Для выпуска npm-пакетов вручную запустите `Prepare SDK release` на `stable`. Workflow проверяет доступ к репозиторию через `DEPLOY_KEY`, повышает patch-версию обоих SDK командой Yarn, выполняет `yarn checks` и создаёт commit с `[skip ci]`. В commit входят только `packages/browser/package.json`, `packages/react/package.json` и изменения `yarn.lock`, созданные Yarn. После проверки состава и секретов commit отправляется в `stable`, затем через штатный `GITHUB_TOKEN` вызывается `SDK release` на точном SHA. Повторная попытка того же запуска переиспользует подготовленный commit. Этот процесс не запускает серверный deploy.
+
+Версии фиксируются **до публикации**, чтобы npm provenance ссылался на соответствующий commit в GitHub. Например, оба SDK переходят с `0.1.1` на `0.1.2` одним commit. Если npm-публикация не удалась, повторите упавший `SDK release` на том же SHA: новая подготовка с актуальной `stable` создаст следующую patch-версию.
 
 `SDK release` публикует только отсутствующие версии пакетов с provenance, сверяет состав существующих версий и проверяет скачанные из npm tarballs в browser/React fixtures. Последний job отправляет события этими опубликованными SDK в одноразовую Docker-установку. Только шаг публикации получает `NPM_TOKEN`.
 
@@ -30,21 +32,25 @@ SDK остаются в исходниках и проходят контрак�
 - Основная ветка `stable`; разрешены GitHub Actions и `workflow_dispatch`.
 - Ruleset для `stable`: review, обязательный `Checks / checks`, запрет force push и удаления ветки. Точные названия status checks появляются после первого запуска.
 - Создайте команду `GetException/maintainers` с write access либо замените её в `.github/CODEOWNERS` реальной командой. Включите обязательный review владельцев кода.
-- Только перед выпуском SDK: создайте environment `release` с независимым approval. Добавьте в него `NPM_TOKEN` с правом публикации только двух SDK. Разрешите GitHub Actions публиковать в npm от имени владельца scope `@getexception`.
-- Только для подготовки SDK на защищённой `stable` задайте repository secret `RELEASE_TOKEN`: fine-grained token отдельного release-оператора с `Contents: write` и `Actions: write`. Его актор должен иметь разрешённый ruleset bypass только для автоматического release commit. Без токена workflow использует `GITHUB_TOKEN`, который обычно не может обойти защиту ветки. Обычные изменения проходят PR/review.
+- Перед выпуском SDK создайте environment `release` с независимым approval. Добавьте `NPM_TOKEN` с правом публикации двух SDK в repository secrets либо secrets этого environment. Workflow передаёт токен только шагу публикации. Разрешите GitHub Actions публиковать в npm от имени владельца scope `@getexception`.
+- Для подготовки SDK добавьте публичную часть отдельного SSH-ключа в **Settings → Deploy keys** с флагом **Allow write access**, а приватную часть целиком — в repository secret `DEPLOY_KEY`. Workflow использует этот ключ только для подготовки и push release commit. Для защищённой `stable` её правила должны разрешать такой commit; право записи ключа само по себе не обходит ruleset. `RELEASE_TOKEN` не нужен: встроенный `GITHUB_TOKEN` с `Actions: write` используется только для вызова `SDK release`. Обычные изменения проходят PR/review.
 - Создайте environment `production` с обязательным approval и разрешением только для `stable`. Параллельные выпуски сериализованы через workflow concurrency, на сервере действует дополнительный lock.
 
-Доступ к серверу пока не нужен. Эти параметры добавляются на следующем этапе:
+Для обновления сервера используются следующие параметры. Variables и secrets можно задать на уровне репозитория или environment `production`; `DEPLOY_ENABLED` задаётся на уровне репозитория:
 
-| Тип                 | Имя                  | Назначение                                                                        |
-| ------------------- | -------------------- | --------------------------------------------------------------------------------- |
-| Repository variable | `DEPLOY_ENABLED`     | Оставить пустой до первой установки; затем `true`                                 |
-| Production variable | `DEPLOY_HOST`        | SSH hostname или IPv4 сервера                                                     |
-| Production variable | `DEPLOY_USER`        | Пользователь, которому принадлежат установка и Docker доступ                      |
-| Production variable | `DEPLOY_PORT`        | По умолчанию `22`                                                                 |
-| Production variable | `DEPLOY_DIR`         | По умолчанию `/opt/getexception`                                                  |
-| Production secret   | `DEPLOY_SSH_KEY`     | Отдельный приватный ключ deploy-пользователя                                      |
-| Production secret   | `DEPLOY_KNOWN_HOSTS` | Проверенная запись host key сервера; fingerprint сверяется по независимому каналу |
+| Тип                 | Имя               | Назначение                                                                        |
+| ------------------- | ----------------- | --------------------------------------------------------------------------------- |
+| Repository variable | `DEPLOY_ENABLED`  | Оставить пустой до первой установки; затем `true`                                 |
+| Variable            | `SSH_HOST`        | SSH hostname или IPv4 сервера                                                     |
+| Variable            | `SSH_USER`        | Пользователь, которому принадлежат установка и Docker доступ                      |
+| Variable            | `DEPLOY_PORT`     | По умолчанию `22`                                                                 |
+| Variable            | `DEPLOY_DIR`      | По умолчанию `/opt/getexception`                                                  |
+| Secret              | `SSH_KEY`         | Приватный ключ для доступа к серверу; публичная часть в его `authorized_keys`     |
+| Secret              | `SSH_KNOWN_HOSTS` | Проверенная запись host key сервера; fingerprint сверяется по независимому каналу |
+
+Для совместимости сохранены прежние имена `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` и `DEPLOY_KNOWN_HOSTS`: они используются, если соответствующие `SSH_*` не заданы. Значения сервера не зашиваются в workflow.
+
+`DEPLOY_KEY` даёт GitHub Actions доступ к **репозиторию** для коммита версий. `SSH_KEY` даёт доступ к **серверу** для обновления приложения. Это разные ключи и направления подключения; `SSH_KNOWN_HOSTS` содержит публичный ключ самого сервера и не заменяет ни один из них.
 
 SSH использует строгую проверку host key. CI не выполняет `ssh-keyscan` с автоматическим доверием и не создаёт новый Owner на сервере.
 

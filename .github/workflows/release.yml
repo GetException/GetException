@@ -209,11 +209,11 @@ jobs:
       - run: python3 scripts/release/check-head.py
       - name: Update the existing server and verify event processing
         env:
-          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ vars.SSH_HOST || vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.SSH_USER || vars.DEPLOY_USER }}
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.SSH_KEY || secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS || secrets.DEPLOY_KNOWN_HOSTS }}
           RELEASE_SHA: ${{ github.sha }}
         run: python3 scripts/release/ssh-deploy.py
