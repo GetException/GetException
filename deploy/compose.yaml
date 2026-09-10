@@ -69,6 +69,7 @@ services:
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Run the production installer}
       AUTH_RATE_KEY: ${AUTH_RATE_KEY:?Run the production installer}
       MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run the production installer}
+      MAIL_ENABLED: ${MAIL_ENABLED:-true}
     networks: [dashboard, database]
     healthcheck:
       <<: *health
@@ -136,10 +137,11 @@ services:
     environment:
       DATABASE_URL: postgresql://getexception_mail:${MAIL_PASSWORD}@postgres:5432/getexception
       MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run the production installer}
-      SMTP_HOST: ${SMTP_HOST:?Configure SMTP}
+      MAIL_ENABLED: ${MAIL_ENABLED:-true}
+      SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_MODE: ${SMTP_MODE:-starttls}
-      SMTP_FROM: ${SMTP_FROM:?Configure sender}
+      SMTP_FROM: ${SMTP_FROM:-}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     networks: [database, mail]

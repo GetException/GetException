@@ -86,6 +86,17 @@ test("installed release: setup, real SDK events and preserved login", async ({
     );
 
     expect(stepUp).toBe(200);
+    phase = "email disabled";
+    await page.goto(origin + "/members");
+    await expect(
+      page.getByText(
+        /Invitations are unavailable while email delivery is disabled/,
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Send invitation", exact: true }),
+    ).toHaveCount(0);
+
     phase = "project";
     await page.goto(origin + "/projects/new");
     await page.getByLabel("Project name").fill("Release validation");

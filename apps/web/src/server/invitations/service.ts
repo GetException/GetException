@@ -17,6 +17,12 @@ import { cancelInvitationMail, queueInvitationMail } from "./mail";
 export class InvitationService {
   constructor(private readonly auth: AuthService) {}
 
+  private requireMail() {
+    if (!this.auth.config.MAIL_ENABLED) {
+      throw new AuthError(503, "mail_disabled");
+    }
+  }
+
   private async lock(tx: Transaction, id: string) {
     const found = await tx.invitation.findUnique({ where: { id } });
 
@@ -42,6 +48,8 @@ export class InvitationService {
   }
 
   private async find(value: string) {
+    this.requireMail();
+
     if (!/^[a-f0-9]{64}$/.test(value)) {
       throw new AuthError(404);
     }
@@ -65,6 +73,7 @@ export class InvitationService {
     const data = invitationInput.parse(input);
 
     return ownerTransaction(this.auth, headers, async (tx, current) => {
+      this.requireMail();
       const organizationId = current.member.organizationId;
       const teams = await tx.team.count({
         where: { id: { in: data.teamIds }, organizationId },
@@ -142,6 +151,10 @@ export class InvitationService {
 
   async change(headers: Headers, id: string, action: "resend" | "revoke") {
     return ownerTransaction(this.auth, headers, async (tx, current) => {
+      if (action === "resend") {
+        this.requireMail();
+      }
+
       const existing = await tx.invitation.findFirst({
         where: { id, organizationId: current.member.organizationId },
       });
@@ -320,6 +333,8 @@ export class InvitationService {
   }
 
   async verifyEmail(value: string, ip: string) {
+    this.requireMail();
+
     await this.auth.rateLimit(ip, "invitation", "invitation_verify");
     const proof = await this.auth.db.invitationVerification.findUnique({
       where: { tokenHash: digest(value) },
@@ -360,6 +375,8 @@ export class InvitationService {
   }
 
   private async registration(value: string, tx: Transaction = this.auth.db) {
+    this.requireMail();
+
     if (!value) {
       throw new AuthError(410);
     }

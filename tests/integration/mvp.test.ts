@@ -66,6 +66,7 @@ beforeAll(async () => {
     TOTP_ENCRYPTION_KEY: encryptionKey,
     AUTH_RATE_KEY: token(),
     MAIL_ENCRYPTION_KEY: token(),
+    MAIL_ENABLED: true,
     BETTER_AUTH_SECRET: token(),
   });
 });

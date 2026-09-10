@@ -10,7 +10,7 @@ async function main() {
   const db = createDatabase(config.DATABASE_URL);
 
   await assertSchema(db);
-  const send = smtpSender(config);
+  const send = config.MAIL_ENABLED ? smtpSender(config) : null;
   let stopping = false;
   const controller = new AbortController();
   const server = createServer((req, res) => {
@@ -33,7 +33,11 @@ async function main() {
       try {
         await assertSchema(db);
         await db.mailOutbox.count();
-        res.writeHead(stopping ? 503 : 200).end('{"ok":true}');
+        res
+          .writeHead(stopping ? 503 : 200)
+          .end(
+            JSON.stringify({ ok: !stopping, mailEnabled: config.MAIL_ENABLED }),
+          );
       } catch {
         res.writeHead(503).end('{"ok":false}');
       }
@@ -56,7 +60,7 @@ async function main() {
 
   while (!stopping) {
     try {
-      if (await runMail(db, config.MAIL_ENCRYPTION_KEY, send)) {
+      if (send && (await runMail(db, config.MAIL_ENCRYPTION_KEY, send))) {
         continue;
       }
     } catch {

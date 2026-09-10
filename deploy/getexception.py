@@ -119,22 +119,27 @@ def configure(root, options):
             not re.fullmatch(r"[a-f0-9]{64}", value) for value in values.values()):
         raise Failure("Supply separate 32-byte hex secrets, or leave them unset to generate them.")
 
-    for key in ["ACME_EMAIL", "SMTP_HOST", "SMTP_FROM"]:
+    values["ACME_EMAIL"] = os.environ.get("ACME_EMAIL", "")
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", values["ACME_EMAIL"]):
+        raise Failure("Configure a valid ACME_EMAIL for HTTPS certificates.")
+    values["MAIL_ENABLED"] = os.environ.get(
+        "MAIL_ENABLED", "true" if os.environ.get("SMTP_HOST") or os.environ.get("SMTP_FROM") else "false")
+    if values["MAIL_ENABLED"] not in ["true", "false"]:
+        raise Failure("MAIL_ENABLED must be true or false.")
+    for key in ["SMTP_HOST", "SMTP_FROM"]:
         values[key] = os.environ.get(key, "")
-        if not values[key]:
-            raise Failure("Missing initial configuration: " + key)
     for key, default in {"SMTP_PORT": "587", "SMTP_MODE": "starttls", "SMTP_USER": "",
                          "SMTP_PASSWORD": "", "WORKER_CONCURRENCY": "4"}.items():
         values[key] = os.environ.get(key, default)
-    if values["SMTP_MODE"] not in ["tls", "starttls"]:
-        raise Failure("Production SMTP requires tls or starttls.")
-    if not values["SMTP_PORT"].isdigit() or not 0 < int(values["SMTP_PORT"]) < 65536:
-        raise Failure("Invalid SMTP port.")
-    for key in ["SMTP_FROM", "ACME_EMAIL"]:
-        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", values[key]):
-            raise Failure("Invalid email setting: " + key)
-    if not re.fullmatch(r"[a-zA-Z0-9.-]+", values["SMTP_HOST"]):
-        raise Failure("Invalid SMTP hostname.")
+    if values["MAIL_ENABLED"] == "true":
+        if values["SMTP_MODE"] not in ["tls", "starttls"]:
+            raise Failure("Production SMTP requires tls or starttls.")
+        if not values["SMTP_PORT"].isdigit() or not 0 < int(values["SMTP_PORT"]) < 65536:
+            raise Failure("Invalid SMTP port.")
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", values["SMTP_FROM"]):
+            raise Failure("Configure a valid SMTP_FROM to enable email delivery.")
+        if not re.fullmatch(r"[a-zA-Z0-9.-]+", values["SMTP_HOST"]):
+            raise Failure("Configure SMTP_HOST to enable email delivery.")
     if not values["WORKER_CONCURRENCY"].isdigit() or not 1 <= int(values["WORKER_CONCURRENCY"]) <= 16:
         raise Failure("WORKER_CONCURRENCY must be between 1 and 16.")
 

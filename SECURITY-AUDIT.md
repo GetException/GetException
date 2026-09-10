@@ -351,6 +351,8 @@ Anonymous preview возвращает только название workspace, 
 
 ### Хранение и проверка TOTP
 
+Установка с отключённой почтой (`MAIL_ENABLED=false`) сохраняет обязательный TOTP Owner и серверные проверки доступа. Приглашения закрыты сервером до включения доставки; отзыв прежних приглашений остаётся доступен Owner. Отсутствие SMTP не разрешает ручную выдачу invitation tokens, пропуск подтверждения email или восстановление Owner одним письмом. Worker не читает очередь для отправки и не расходует попытки доставки; существующие ciphertext и ключи сохраняются.
+
 Сервер хранит TOTP как versioned AES-256-GCM ciphertext с отдельным production key. В authenticated additional data входят user ID и состояние `pending` или `active`. Ingest, worker-events и worker-retention не получают ключ. Production web не запускается при отсутствии или неверной длине ключа, а backup секретов обязан включать этот ключ.
 
 Настройка состоит из pending credential и подтверждения первым кодом. До подтверждения второй фактор не считается включённым. Ответ с `otpauth://` URI, ручным secret и recovery codes получает `Cache-Control: no-store` и никогда не попадает в логи или audit metadata.

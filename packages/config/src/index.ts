@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const mailEnabled = z
+  .enum(["true", "false"])
+  .default("true")
+  .transform((value) => value === "true");
+
 const httpsOrigin = z
   .string()
   .url()
@@ -14,7 +19,9 @@ const httpsOrigin = z
     );
   }, "Use an exact HTTPS origin");
 
-export function webConfig(env: NodeJS.ProcessEnv = process.env) {
+export function webConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
   const config = z
     .object({
       DATABASE_URL: z.string().min(1),
@@ -24,6 +31,7 @@ export function webConfig(env: NodeJS.ProcessEnv = process.env) {
       TOTP_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/),
       AUTH_RATE_KEY: z.string().regex(/^[a-f0-9]{64}$/),
       MAIL_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/),
+      MAIL_ENABLED: mailEnabled,
     })
     .parse(env);
 
@@ -59,10 +67,20 @@ export function workerConcurrency(
 export function mailConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
-  const config = z
+  const base = z
     .object({
       DATABASE_URL: z.string().min(1),
       MAIL_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/),
+      MAIL_ENABLED: mailEnabled,
+    })
+    .parse(env);
+
+  if (!base.MAIL_ENABLED) {
+    return { ...base, MAIL_ENABLED: false as const };
+  }
+
+  const config = z
+    .object({
       SMTP_HOST: z.string().min(1),
       SMTP_PORT: z.coerce.number().int().min(1).max(65535),
       SMTP_MODE: z.enum(["tls", "starttls", "local"]).default("starttls"),
@@ -79,7 +97,7 @@ export function mailConfig(
     throw new Error("Unencrypted SMTP is limited to the local mail catcher");
   }
 
-  return config;
+  return { ...base, ...config, MAIL_ENABLED: true as const };
 }
 
 export function canonicalOrigin(value: string, allowLocal = false): string {

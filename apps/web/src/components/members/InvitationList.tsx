@@ -3,7 +3,9 @@ import { InvitationActions } from "./InvitationActions";
 
 export function InvitationList({
   invitations,
+  mailEnabled,
 }: {
+  mailEnabled: boolean;
   invitations: {
     id: string;
     email: string;
@@ -58,7 +60,10 @@ export function InvitationList({
                     <td>{dateTime(invitation.expiresAt)}</td>
                     <td>
                       {["pending", "expired"].includes(invitation.status) && (
-                        <InvitationActions id={invitation.id} />
+                        <InvitationActions
+                          id={invitation.id}
+                          mailEnabled={mailEnabled}
+                        />
                       )}
                     </td>
                   </tr>
@@ -69,7 +74,9 @@ export function InvitationList({
         </div>
       ) : (
         <p className="content-note">
-          No invitations yet. Invite a teammate using the form below.
+          {mailEnabled
+            ? "No invitations yet. Invite a teammate using the form below."
+            : "No invitations yet. Email delivery is disabled."}
         </p>
       )}
     </section>

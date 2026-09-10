@@ -61,8 +61,8 @@ def main():
         images = {}
         names = ["web", "ingest", "worker", "mail", "migrate"]
         sha = args.published or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        env = {**os.environ, "SMTP_HOST": "smtp.example.com", "SMTP_FROM": "monitor@example.com",
-               "ACME_EMAIL": "admin@example.com"}
+        env = {key: value for key, value in os.environ.items() if not key.startswith("SMTP_")}
+        env.update(ACME_EMAIL="admin@example.com", MAIL_ENABLED="false")
         options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
         if args.build:
             if not args.built:
@@ -79,7 +79,7 @@ def main():
             (root / "runtime").mkdir()
             installer.extract_archive(work / "bundle/getexception.tar.gz", release)
             from unittest.mock import patch
-            with patch.dict(os.environ, env):
+            with patch.dict(os.environ, env, clear=True):
                 installer.configure(root, options)
         else:
             run(["gh", "release", "download", "deploy-" + sha, "--repo", installer.REPOSITORY,
@@ -102,7 +102,7 @@ def main():
             if not (fixture_root / (name + "-spa/dist/index.html")).is_file():
                 raise RuntimeError("Build the browser/React fixtures before testing the installer")
 
-        # Keep the verified bundle unchanged. Only this test override enables local TLS and Mailpit.
+        # Keep the verified bundle unchanged. Only this test override enables local TLS.
         caddy = (release / "Caddyfile").read_text().replace("{$DASHBOARD_HOST} {", "{$DASHBOARD_HOST} {\n\ttls internal")
         caddy = caddy.replace("{$INGEST_HOST} {", "{$INGEST_HOST} {\n\ttls internal")
         for name in ["browser", "react"]:
@@ -112,8 +112,6 @@ def main():
         override = {"services": {
             "web": {"environment": {"DASHBOARD_ORIGIN": "https://monitor.localhost", "INGEST_ORIGIN": "https://ingest.monitor.localhost"}},
             "ingest": {"environment": {"INGEST_ORIGIN": "https://ingest.monitor.localhost"}},
-            "worker-mail": {"environment": {"SMTP_HOST": "mailpit", "SMTP_PORT": "1025", "SMTP_MODE": "local"}},
-            "mailpit": {"image": "axllent/mailpit:v1.31.1", "networks": ["mail"]},
             "caddy": {"environment": {"DASHBOARD_HOST": "monitor.localhost", "INGEST_HOST": "ingest.monitor.localhost"},
                       "volumes": [str(work / "Caddyfile.test") + ":/etc/caddy/Caddyfile:ro",
                                   str(fixture_root / "browser-spa/dist") + ":/srv/browser:ro",
@@ -152,8 +150,10 @@ def main():
 
         installation = DockerInstallation(root)
         try:
-            installation.compose(release, "up", "-d", "mailpit")
             installation.deploy(release, first=True)
+            installation.compose(release, "exec", "-T", "worker-mail", "node", "-e",
+                                 "fetch('http://127.0.0.1:3003/health/ready').then(async r=>"
+                                 "process.exit(r.ok && (await r.json()).mailEnabled===false ? 0 : 1))")
             test_env = {**os.environ, "DEPLOYMENT_TEST_DIR": str(root), "DEPLOYMENT_TEST_PROJECT": project}
             run(["corepack", "yarn", "playwright", "test", "--config", "playwright.deployment.config.ts"], env=test_env)
             query = 'SELECT (SELECT count(*) FROM "user"), (SELECT count(*) FROM member), (SELECT count(*) FROM project), (SELECT count(*) FROM error_event)'

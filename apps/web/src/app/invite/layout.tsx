@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { getRuntime } from "../../server/runtime";
 
 // The CSP nonce is generated per request; invitation pages must hydrate with that nonce.
 export const dynamic = "force-dynamic";
@@ -27,7 +28,14 @@ export default function InvitationLayout({
       </div>
       <section className="auth-panel">
         <span className="eyebrow">WORKSPACE INVITATION</span>
-        {children}
+        {getRuntime().config.MAIL_ENABLED ? (
+          children
+        ) : (
+          <p>
+            Invitations are unavailable while email delivery is disabled.
+            Contact the person who invited you.
+          </p>
+        )}
       </section>
     </main>
   );

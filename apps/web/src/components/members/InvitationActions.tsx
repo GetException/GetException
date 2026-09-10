@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 import { Button } from "@base-ui/react/button";
 import { post } from "../forms/utils";
 
-export function InvitationActions({ id }: { id: string }) {
+export function InvitationActions({
+  id,
+  mailEnabled,
+}: {
+  id: string;
+  mailEnabled: boolean;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -29,7 +35,7 @@ export function InvitationActions({ id }: { id: string }) {
       <div className="actions">
         <Button
           className="button compact"
-          disabled={busy}
+          disabled={busy || !mailEnabled}
           onClick={() => change("resend")}
         >
           Resend

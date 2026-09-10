@@ -136,6 +136,7 @@ beforeAll(async () => {
     TOTP_ENCRYPTION_KEY: token(),
     AUTH_RATE_KEY: token(),
     MAIL_ENCRYPTION_KEY: token(),
+    MAIL_ENABLED: true,
   });
   invitations = new InvitationService(service);
 });
@@ -205,6 +206,58 @@ afterAll(async () => {
 });
 
 describe("email-bound invitations", () => {
+  it("keeps Owner access without email, blocks invitations without writes and permits revocation", async () => {
+    const invitation = await invite("pending@example.test");
+    const offline = new AuthService(web, {
+      ...service.config,
+      MAIL_ENABLED: false,
+    });
+    const paused = new InvitationService(offline);
+    const before = await web.mailOutbox.findMany();
+    const disabled = { status: 503, reason: "mail_disabled" };
+
+    expect((await offline.authorize(ownerHeaders, true)).member.role).toBe(
+      "owner",
+    );
+    await expect(
+      paused.create(ownerHeaders, {
+        email: "new@example.test",
+        role: "viewer",
+        teamIds,
+      }),
+    ).rejects.toMatchObject(disabled);
+    await expect(
+      paused.change(ownerHeaders, invitation.id, "resend"),
+    ).rejects.toMatchObject(disabled);
+    await expect(paused.preview(invitation.value)).rejects.toMatchObject(
+      disabled,
+    );
+    await expect(
+      paused.requestVerification(invitation.value, randomUUID()),
+    ).rejects.toMatchObject(disabled);
+    await expect(
+      paused.verifyEmail(token(), randomUUID()),
+    ).rejects.toMatchObject(disabled);
+    await expect(paused.registrationDetails(token())).rejects.toMatchObject(
+      disabled,
+    );
+    expect(await web.invitation.count()).toBe(1);
+    expect(await web.invitationVerification.count()).toBe(0);
+    expect(await web.mailOutbox.findMany()).toEqual(before);
+
+    await paused.change(ownerHeaders, invitation.id, "revoke");
+    expect(
+      await web.invitation.findUniqueOrThrow({ where: { id: invitation.id } }),
+    ).toMatchObject({ status: "revoked", tokenHash: null });
+    expect(
+      await web.mailOutbox.findUniqueOrThrow({ where: { id: before[0]!.id } }),
+    ).toMatchObject({ status: "cancelled", payload: null });
+
+    // Restoring delivery uses the same Owner, keys and database.
+    await expect(invite("later@example.test")).resolves.toHaveProperty("id");
+    expect(await web.user.count()).toBe(1);
+  });
+
   it("requires separate email proof, masks public preview and atomically joins every invited team", async () => {
     const invitation = await invite("developer@example.test");
     const preview = await invitations.preview(invitation.value);

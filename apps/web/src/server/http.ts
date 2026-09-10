@@ -95,6 +95,8 @@ export async function safeRoute(fn: () => Promise<Response>) {
           : 503;
 
     const reasons: Record<string, string> = {
+      mail_disabled:
+        "Invitations are unavailable while email delivery is disabled. Contact your server administrator.",
       member_exists:
         "This email already belongs to a member. Edit their access in Members.",
       invitation_pending:

@@ -5,6 +5,10 @@ import type { mailConfig } from "@getexception/config";
 import type { MailSender } from "./queue";
 
 export function smtpSender(config: ReturnType<typeof mailConfig>): MailSender {
+  if (!config.MAIL_ENABLED) {
+    throw new Error("Email delivery is disabled");
+  }
+
   return async (payload, messageId) => {
     let socket: Socket | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;

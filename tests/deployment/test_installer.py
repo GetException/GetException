@@ -83,9 +83,36 @@ class InstallerTests(unittest.TestCase):
             second = installer.configure(self.root, options)
         self.assertEqual(first, second)
         self.assertEqual(first["SMTP_PASSWORD"], env["SMTP_PASSWORD"])
+        self.assertEqual(first["MAIL_ENABLED"], "true")
         self.assertEqual(token, (self.root / "runtime/setup-token").read_bytes())
         self.assertEqual((self.root / "runtime/.env").stat().st_mode & 0o777, 0o600)
         self.assertEqual(len({first[key] for key in installer.SECRET_KEYS}), len(installer.SECRET_KEYS))
+
+    def test_fresh_installation_without_smtp_keeps_email_disabled_across_reinstallation(self):
+        options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
+        with patch.dict(os.environ, {"ACME_EMAIL": "admin@example.com"}, clear=True):
+            first = installer.configure(self.root, options)
+        self.assertEqual(first["MAIL_ENABLED"], "false")
+        self.assertEqual(first["SMTP_HOST"], "")
+        self.assertEqual(first["SMTP_FROM"], "")
+        token = (self.root / "runtime/setup-token").read_bytes()
+        with patch.dict(os.environ, {"MAIL_ENABLED": "true", "SMTP_HOST": "smtp.example.com",
+                                     "SMTP_FROM": "monitor@example.com"}, clear=True):
+            second = installer.configure(self.root, options)
+        self.assertEqual(first, second)
+        self.assertEqual(token, (self.root / "runtime/setup-token").read_bytes())
+
+    def test_enabled_email_requires_valid_smtp_before_writing_configuration(self):
+        options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
+        valid = {"ACME_EMAIL": "admin@example.com", "MAIL_ENABLED": "true",
+                 "SMTP_HOST": "smtp.example.com", "SMTP_FROM": "monitor@example.com"}
+        for invalid in [{"SMTP_HOST": ""}, {"SMTP_FROM": ""}, {"SMTP_PORT": "0"},
+                        {"SMTP_MODE": "local"}, {"MAIL_ENABLED": "no"}]:
+            with self.subTest(invalid=invalid), patch.dict(os.environ, {**valid, **invalid}, clear=True):
+                with self.assertRaises(installer.Failure):
+                    installer.configure(self.root, options)
+            self.assertFalse((self.root / "runtime/.env").exists())
+            self.assertFalse((self.root / "runtime/setup-token").exists())
 
     def test_rejects_weak_reused_and_invalid_configuration(self):
         options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")

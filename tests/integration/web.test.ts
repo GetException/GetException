@@ -18,6 +18,7 @@ it("serves invitation pages with working per-request script nonces and rejects u
     BETTER_AUTH_SECRET: secret(),
     TOTP_ENCRYPTION_KEY: secret(),
     MAIL_ENCRYPTION_KEY: secret(),
+    MAIL_ENABLED: "true",
     AUTH_RATE_KEY: secret(),
   });
 

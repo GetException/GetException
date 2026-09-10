@@ -31,6 +31,10 @@ export default async function SettingsPage() {
             </div>
             <dl className="settings-list">
               <div>
+                <dt>Email delivery</dt>
+                <dd>{config.MAIL_ENABLED ? "Enabled" : "Disabled"}</dd>
+              </div>
+              <div>
                 <dt>Name</dt>
                 <dd>{workspace.name}</dd>
               </div>

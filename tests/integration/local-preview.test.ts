@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createDatabase, type Database } from "@getexception/db";
+import { webConfig } from "@getexception/config";
 import { startLocalDatabase } from "../../scripts/local/database";
 import {
   availablePort,
@@ -27,7 +28,7 @@ it("keeps the account, MFA, session, project, event and keys through a native Po
     database = await startLocalDatabase(directory, initial);
     web = createDatabase(databaseUrl(initial, "web"));
     worker = createDatabase(databaseUrl(initial, "worker"));
-    const service = new AuthService(web, localWebConfig(initial));
+    const service = new AuthService(web, webConfig(localWebConfig(initial)));
     const password = randomBytes(24).toString("base64url");
     const setup = readFileSync(join(directory, "setup-token"), "utf8");
     const access = await service.setupAccess(setup, "local-restart-test");
@@ -119,7 +120,7 @@ it("keeps the account, MFA, session, project, event and keys through a native Po
     database = await startLocalDatabase(directory, restored);
     expect(database.installed).toBe(true);
     web = createDatabase(databaseUrl(restored, "web"));
-    const resumed = new AuthService(web, localWebConfig(restored));
+    const resumed = new AuthService(web, webConfig(localWebConfig(restored)));
 
     await expect(resumed.authorize(headers)).resolves.toBeDefined();
     expect(await web.bootstrapToken.count()).toBe(0);
