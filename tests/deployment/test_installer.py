@@ -39,8 +39,8 @@ class SimulatedInstallation(installer.Installation):
     def backup(self, release):
         self.calls.append((release.name, ("backup",)))
 
-    def ready(self, release):
-        self.calls.append((release.name, ("ready",)))
+    def ready(self, release, *, defer_ingest_dns=False):
+        self.calls.append((release.name, ("ready-deferred",) if defer_ingest_dns else ("ready",)))
         if release == self.fail_health:
             raise installer.Failure("unhealthy")
 
@@ -90,8 +90,9 @@ class InstallerTests(unittest.TestCase):
 
     def test_fresh_installation_without_smtp_keeps_email_disabled_across_reinstallation(self):
         options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
-        with patch.dict(os.environ, {"ACME_EMAIL": "admin@example.com"}, clear=True):
+        with patch.dict(os.environ, {}, clear=True):
             first = installer.configure(self.root, options)
+        self.assertEqual(first["ACME_EMAIL"], "")
         self.assertEqual(first["MAIL_ENABLED"], "false")
         self.assertEqual(first["SMTP_HOST"], "")
         self.assertEqual(first["SMTP_FROM"], "")
@@ -101,6 +102,15 @@ class InstallerTests(unittest.TestCase):
             second = installer.configure(self.root, options)
         self.assertEqual(first, second)
         self.assertEqual(token, (self.root / "runtime/setup-token").read_bytes())
+
+    def test_invalid_acme_contact_is_rejected_before_writing_secrets(self):
+        options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
+        for email in ["admin", "a b@example.com", 'a"@example.com', "a\\b@example.com", "a\n@example.com"]:
+            with self.subTest(email=email), patch.dict(os.environ, {"ACME_EMAIL": email}, clear=True):
+                with self.assertRaisesRegex(installer.Failure, "ACME_EMAIL"):
+                    installer.configure(self.root, options)
+            self.assertFalse((self.root / "runtime/.env").exists())
+            self.assertFalse((self.root / "runtime/setup-token").exists())
 
     def test_enabled_email_requires_valid_smtp_before_writing_configuration(self):
         options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
@@ -215,6 +225,59 @@ class InstallerTests(unittest.TestCase):
         installation.deploy(target, first=True)
         self.assertFalse(any(args == ("backup",) for _, args in installation.calls))
 
+    def test_deferred_first_install_records_incomplete_ingest_and_rejects_deferred_updates(self):
+        installation = SimulatedInstallation(self.root)
+        target = self.release()
+        installation.deploy(target, first=True, defer_ingest_dns=True)
+        self.assertEqual(installation.current(), target)
+        self.assertIn((target.name, ("ready-deferred",)), installation.calls)
+        self.assertTrue(json.loads((self.root / "runtime/state.json").read_text())["ingestDnsPending"])
+        installation.calls.clear()
+        for first in [True, False]:
+            with self.assertRaisesRegex(installer.Failure, "first installation"):
+                installation.deploy(target, first=first, defer_ingest_dns=True)
+        with patch.object(installation, "smoke", side_effect=installer.Failure("DNS pending")):
+            with self.assertRaisesRegex(installer.Failure, "DNS pending"):
+                installation.deploy(target)
+        self.assertEqual(installation.calls, [])
+        with patch.object(installation, "smoke") as smoke:
+            installation.deploy(target)
+            smoke.assert_called_once_with(target)
+        self.assertFalse(json.loads((self.root / "runtime/state.json").read_text())["ingestDnsPending"])
+
+    def test_deferred_install_cannot_skip_required_ingestion_smoke(self):
+        installation = SimulatedInstallation(self.root)
+        with self.assertRaisesRegex(installer.Failure, "first installation"):
+            installation.deploy(self.release(), first=True, require_ingestion=True, defer_ingest_dns=True)
+        self.assertEqual(installation.calls, [])
+
+    def test_deferred_smoke_still_verifies_dashboard_tls_boundaries_and_internal_ingest(self):
+        installation = SimulatedInstallation(self.root)
+        target = self.release()
+        installer.atomic_write(self.root / "runtime/.env", installer.env_text({
+            "DASHBOARD_HOST": "monitor.example.com", "INGEST_HOST": "ingest.example.com"}))
+        for deferred in [True, False]:
+            with self.subTest(deferred=deferred), patch.object(installer, "run", side_effect=["200", "404", "404"]) as curl:
+                installation.smoke(target, defer_ingest_dns=deferred)
+            urls = [call.args[0][-1] for call in curl.call_args_list]
+            expected = ["https://monitor.example.com/login", "https://monitor.example.com/health/ready"]
+            self.assertEqual(urls, expected if deferred else expected + ["https://ingest.example.com/api/dashboard/status"])
+            self.assertTrue(all("--insecure" not in call.args[0] for call in curl.call_args_list))
+            self.assertIn("ingest", installation.calls[-1][1])
+            self.assertIn("health/ready", installation.calls[-1][1][-1])
+        with patch.object(installer, "run", side_effect=installer.Failure("untrusted TLS")), patch.object(installer.time, "sleep"):
+            with self.assertRaisesRegex(installer.Failure, "HTTPS smoke check failed"):
+                installation.smoke(target, defer_ingest_dns=True)
+
+    def test_deferred_install_still_fails_on_service_or_dashboard_health_failure(self):
+        installation = SimulatedInstallation(self.root)
+        target = self.release()
+        installation.fail_health = target
+        with self.assertRaisesRegex(installer.Failure, "Release failed"):
+            installation.deploy(target, first=True, defer_ingest_dns=True)
+        self.assertTrue(installation.pending.exists())
+        self.assertFalse((self.root / "runtime/state.json").exists())
+
     def test_release_bundle_has_only_expected_files_and_no_secrets(self):
         release = self.release()
         info = installer.metadata(release)
@@ -274,10 +337,34 @@ class InstallerTests(unittest.TestCase):
         bundle.build_bundle(info["sha"], info["images"], output)
         def download(url, path):
             path.write_bytes((output / path.name).read_bytes())
-        with patch.object(installer, "download", download), patch.object(installer, "run", side_effect=installer.Failure("bad signature")):
-            with self.assertRaisesRegex(installer.Failure, "bad signature"):
-                installer.fetch_release(self.root, info["sha"])
+        for options in [{}, {"attestation_bundle": "bundle.jsonl", "trusted_root": "root.jsonl"}]:
+            with patch.object(installer, "download", download), patch.object(installer, "run", side_effect=installer.Failure("bad signature")):
+                with self.assertRaisesRegex(installer.Failure, "bad signature"):
+                    installer.fetch_release(self.root, info["sha"], **options)
         self.assertEqual(list(release.iterdir()), [release / "release.json"])
+
+    def test_offline_verification_keeps_signer_identity_and_requires_both_files(self):
+        info = installer.metadata(self.release())
+        output = self.root / "output"
+        bundle.build_bundle(info["sha"], info["images"], output)
+        destination = self.root / "offline-installation"
+        (destination / "releases").mkdir(parents=True)
+
+        def download(url, path):
+            path.write_bytes((output / path.name).read_bytes())
+
+        with patch.object(installer, "download", download), patch.object(installer, "run") as verify:
+            target = installer.fetch_release(destination, info["sha"], attestation_bundle="bundle.jsonl", trusted_root="root.jsonl")
+        self.assertEqual(installer.metadata(target)["sha"], info["sha"])
+        self.assertEqual(verify.call_args.args[0][:3], ["gh", "attestation", "verify"])
+        self.assertEqual(verify.call_args.args[0][4:], [
+            "--repo", installer.REPOSITORY, "--signer-workflow", installer.WORKFLOW,
+            "--source-ref", "refs/heads/stable", "--source-digest", info["sha"],
+            "--bundle", str(Path("bundle.jsonl").resolve()), "--custom-trusted-root", str(Path("root.jsonl").resolve())])
+        for options in [{"attestation_bundle": "bundle.jsonl"}, {"trusted_root": "root.jsonl"}]:
+            with patch.object(installer, "download") as fetch, self.assertRaisesRegex(installer.Failure, "both"):
+                installer.fetch_release(destination, info["sha"], **options)
+            fetch.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -120,8 +120,8 @@ def configure(root, options):
         raise Failure("Supply separate 32-byte hex secrets, or leave them unset to generate them.")
 
     values["ACME_EMAIL"] = os.environ.get("ACME_EMAIL", "")
-    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", values["ACME_EMAIL"]):
-        raise Failure("Configure a valid ACME_EMAIL for HTTPS certificates.")
+    if values["ACME_EMAIL"] and not re.fullmatch(r"[a-zA-Z0-9._+%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", values["ACME_EMAIL"]):
+        raise Failure("ACME_EMAIL must be empty or a valid contact email.")
     values["MAIL_ENABLED"] = os.environ.get(
         "MAIL_ENABLED", "true" if os.environ.get("SMTP_HOST") or os.environ.get("SMTP_FROM") else "false")
     if values["MAIL_ENABLED"] not in ["true", "false"]:
@@ -208,9 +208,13 @@ def download(url, path):
             target.write(chunk)
 
 
-def fetch_release(root, sha, archive_url=None):
+def fetch_release(root, sha, archive_url=None, *, attestation_bundle=None, trusted_root=None):
     if not SHA.fullmatch(sha):
         raise Failure("--release requires the full 40-character Git commit SHA.")
+    if bool(attestation_bundle) != bool(trusted_root):
+        raise Failure("Offline verification requires both --attestation-bundle and --trusted-root.")
+    verification = (["--bundle", str(Path(attestation_bundle).resolve()),
+                     "--custom-trusted-root", str(Path(trusted_root).resolve())] if attestation_bundle else [])
     base = "https://github.com/" + REPOSITORY + "/releases/download/deploy-" + sha + "/"
     url = archive_url or base + "getexception.tar.gz"
 
@@ -225,7 +229,7 @@ def fetch_release(root, sha, archive_url=None):
             raise Failure("Release checksum verification failed.")
         run(["gh", "attestation", "verify", str(archive), "--repo", REPOSITORY,
              "--signer-workflow", WORKFLOW, "--source-ref", "refs/heads/stable",
-             "--source-digest", sha], timeout=120)
+             "--source-digest", sha, *verification], timeout=120)
         unpacked = temporary / "bundle"
         unpacked.mkdir()
         extract_archive(archive, unpacked)
@@ -290,17 +294,18 @@ class Installation:
             raise Failure("Database backup is empty.")
         return target
 
-    def ready(self, release):
+    def ready(self, release, *, defer_ingest_dns=False):
         self.compose(release, "up", "-d", "--wait", "--wait-timeout", "180", "--no-deps", *SERVICES)
         self.compose(release, "up", "-d", "--wait", "--wait-timeout", "90", "--no-deps", "caddy")
-        self.smoke(release)
+        self.smoke(release, defer_ingest_dns=defer_ingest_dns)
 
-    def smoke(self, release):
+    def smoke(self, release, *, defer_ingest_dns=False):
         config = read_env(self.runtime / ".env")
         # Validate real publicly trusted TLS and both routing boundaries, without auth credentials.
         probes = [(config["DASHBOARD_HOST"], "/login", 200),
-                  (config["DASHBOARD_HOST"], "/health/ready", 404),
-                  (config["INGEST_HOST"], "/api/dashboard/status", 404)]
+                  (config["DASHBOARD_HOST"], "/health/ready", 404)]
+        if not defer_ingest_dns:
+            probes.append((config["INGEST_HOST"], "/api/dashboard/status", 404))
         for host, path, expected in probes:
             for attempt in range(12):
                 try:
@@ -348,12 +353,17 @@ class Installation:
             time.sleep(1)
         raise Failure("The worker did not finish processing the deployment event.")
 
-    def deploy(self, target, *, first=False, require_ingestion=False):
+    def deploy(self, target, *, first=False, require_ingestion=False, defer_ingest_dns=False):
         if self.pending.exists():
             raise Failure("An unfinished operation exists. Inspect runtime/pending.json and follow the recovery guide.")
         old = self.current() if (self.runtime / "state.json").exists() else None
+        if defer_ingest_dns and (not first or old or require_ingestion):
+            raise Failure("--defer-ingest-dns is only allowed on the first installation without ingestion smoke.")
         if not first and old is None:
             raise Failure("Installation has not been started; run install first.")
+        if old and json.loads((self.runtime / "state.json").read_text()).get("ingestDnsPending"):
+            # Fail before any downtime or migration when the initial DNS setup is still incomplete.
+            self.smoke(old)
         self.compose(target, "config", "--quiet")
         self.compose(target, "pull")
         self.compose(target, "up", "-d", "--wait", "--wait-timeout", "120", "postgres")
@@ -371,7 +381,7 @@ class Installation:
         journal["phase"] = "start"
         write_json(self.pending, journal)
         try:
-            self.ready(target)
+            self.ready(target, defer_ingest_dns=defer_ingest_dns)
             if require_ingestion:
                 self.ingestion_smoke(target)
         except (Failure, OSError) as exc:
@@ -386,13 +396,17 @@ class Installation:
         previous = old.name if old else None
         if old == target:
             previous = json.loads((self.runtime / "state.json").read_text()).get("previous")
-        write_json(self.runtime / "state.json", {"current": target.name, "previous": previous})
+        write_json(self.runtime / "state.json", {"current": target.name, "previous": previous,
+                                                 "ingestDnsPending": defer_ingest_dns})
         self.pending.unlink()
         installed = self.compose(target, "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "getexception", "-Atc",
                                  'SELECT count(*) FROM system_setting')
         if installed == "1":
             (self.runtime / "setup-token").unlink(missing_ok=True)
-        print("Release " + target.name + " is ready. Existing accounts and data are preserved.")
+        if defer_ingest_dns:
+            print("Dashboard is ready. Public ingest DNS/HTTPS verification is pending; keep automatic deployment disabled.")
+        else:
+            print("Release " + target.name + " is ready. Existing accounts and data are preserved.")
 
     def rollback(self):
         if self.pending.exists():
@@ -449,11 +463,16 @@ def main():
     parser.add_argument("--install-dir", default="/opt/getexception")
     parser.add_argument("--release")
     parser.add_argument("--archive-url")
+    parser.add_argument("--attestation-bundle", help="Local GitHub attestation bundle for offline verification")
+    parser.add_argument("--trusted-root", help="Local trusted root obtained with gh attestation trusted-root")
     parser.add_argument("--skip-start", action="store_true")
+    parser.add_argument("--defer-ingest-dns", action="store_true", help="First install only: start dashboard while ingest DNS is pending")
     parser.add_argument("--require-ingestion-smoke", action="store_true")
     parser.add_argument("--dashboard-host")
     parser.add_argument("--ingest-host")
     options = parser.parse_args()
+    if options.defer_ingest_dns and (options.command != "install" or options.require_ingestion_smoke or options.skip_start):
+        raise Failure("--defer-ingest-dns requires install without --skip-start or --require-ingestion-smoke.")
     root = Path(options.install_dir).expanduser().resolve()
     prerequisites()
     with locked(root):
@@ -465,7 +484,8 @@ def main():
                 raise Failure("Resolve runtime/pending.json before installing or updating.")
             if options.command == "update" and not installation.current():
                 raise Failure("No running installation exists; use install first.")
-            target = fetch_release(root, options.release, options.archive_url)
+            target = fetch_release(root, options.release, options.archive_url,
+                                   attestation_bundle=options.attestation_bundle, trusted_root=options.trusted_root)
             config = configure(root, options)
             launcher = '#!/usr/bin/env bash\nset -euo pipefail\nroot="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"\nexec python3 "$root/current/getexception.py" "$@" --install-dir "$root"\n'
             atomic_write(root / "getexception", launcher, 0o700)
@@ -474,7 +494,8 @@ def main():
                     installation.switch(target)
                 print("Release downloaded and configuration preserved. Services were not started.")
                 return
-            installation.deploy(target, first=options.command == "install", require_ingestion=options.require_ingestion_smoke)
+            installation.deploy(target, first=options.command == "install", require_ingestion=options.require_ingestion_smoke,
+                                defer_ingest_dns=options.defer_ingest_dns)
             print("Dashboard: https://" + config["DASHBOARD_HOST"])
             if (root / "runtime/setup-token").exists():
                 print("Complete /setup once. Read the private token from " + str(root / "runtime/setup-token"))
@@ -489,12 +510,20 @@ def main():
             elif options.command == "smoke":
                 installation.smoke(current)
                 installation.ingestion_smoke(current)
+                state_path = installation.runtime / "state.json"
+                if state_path.exists():
+                    state = json.loads(state_path.read_text())
+                    state["ingestDnsPending"] = False
+                    write_json(state_path, state)
                 print("HTTPS and event processing checks passed.")
             else:
                 print("Release: " + current.name)
                 print(installation.compose(current, "ps", "--format", "table"))
                 if installation.pending.exists():
                     print("An unfinished operation requires inspection: runtime/pending.json")
+                state_path = installation.runtime / "state.json"
+                if state_path.exists() and json.loads(state_path.read_text()).get("ingestDnsPending"):
+                    print("Public ingest DNS/HTTPS verification is pending; keep automatic deployment disabled.")
 
 
 if __name__ == "__main__":

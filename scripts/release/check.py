@@ -71,7 +71,7 @@ compose_command = ["docker", "compose"] if shutil.which("docker") else ([str(ROO
 if compose_command:
     values = {key: "a" * 64 for key in SECRET_KEYS}
     values.update(SETUP_TOKEN_HASH="b" * 64, DASHBOARD_HOST="monitor.example.com", INGEST_HOST="ingest.example.com",
-                  ACME_EMAIL="admin@example.com", SMTP_HOST="smtp.example.com", SMTP_FROM="monitor@example.com")
+                  ACME_EMAIL="", SMTP_HOST="smtp.example.com", SMTP_FROM="monitor@example.com")
     values.update({name.upper() + "_IMAGE": "ghcr.io/getexception/getexception-" + name + ":validation"
                    for name in ["web", "ingest", "worker", "mail", "migrate"]})
     with tempfile.TemporaryDirectory() as temporary:

@@ -159,7 +159,7 @@ services:
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
-      ACME_EMAIL: ${ACME_EMAIL:?Configure certificate email}
+      ACME_EMAIL: ${ACME_EMAIL:-}
       DASHBOARD_HOST: ${DASHBOARD_HOST:?Configure dashboard domain}
       INGEST_HOST: ${INGEST_HOST:?Configure ingest domain}
     volumes:

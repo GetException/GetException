@@ -64,7 +64,7 @@ SSH использует строгую проверку host key. CI не вы�
 
 ## Первая установка
 
-Выберите полный SHA **завершённого** GitHub Release. Для первого запуска достаточно задать `ACME_EMAIL` — контактный email для HTTPS-сертификатов. Если SMTP не указан, установщик сохраняет `MAIL_ENABLED=false`: Owner проходит обычный setup с TOTP, работает с проектами и ошибками; приглашения временно недоступны. Можно явно передать `MAIL_ENABLED=false`.
+Выберите полный SHA **завершённого** GitHub Release. Контактный `ACME_EMAIL` можно оставить пустым: Caddy получает и продлевает сертификаты автоматически, подтверждая владение доменом через сервер. SMTP для этого не нужен. Если SMTP не указан, установщик сохраняет `MAIL_ENABLED=false`: Owner проходит обычный setup с TOTP, работает с проектами и ошибками; приглашения временно недоступны. Можно явно передать `MAIL_ENABLED=false`.
 
 Чтобы сразу включить письма, задайте `MAIL_ENABLED=true`, `SMTP_HOST`, `SMTP_FROM`, `SMTP_PORT` (`587`), `SMTP_MODE` (`starttls` либо `tls`), при необходимости `SMTP_USER` и `SMTP_PASSWORD`. Для совместимости переданные `SMTP_HOST` или `SMTP_FROM` включают почту при отсутствии явного флага; неполная конфигурация в этом случае останавливает установку. Пароль удобно ввести через `read -rs SMTP_PASSWORD` и затем `export SMTP_PASSWORD`, чтобы он не оказался в истории shell. Переменные должны быть доступны процессу установщика.
 
@@ -77,6 +77,40 @@ release=RELEASE_SHA; base="https://github.com/GetException/GetException/releases
 Те же действия можно выполнить по очереди: скачать оба файла, проверить checksum, проверить attestation и только затем выполнить `bash install-getexception.sh ...`. Сам bootstrap дополнительно проверяет controller, а controller — checksum, attestation и содержимое архива. `--archive-url` позволяет указать другое HTTPS размещение bundle и соседнего `.sha256`; проверка identity и подписей остаётся обязательной.
 
 Параметры `--install-dir /другой/каталог` и `--skip-start` поддерживаются. `--skip-start` скачивает проверенные файлы и создаёт конфигурацию, но не меняет работающую версию. Для запуска после подготовки повторите установку без `--skip-start`.
+
+Если DNS кабинета уже работает, а DNS ingest ещё ожидается, при **первой** установке добавьте `--defer-ingest-dns`. Домен ingest всё равно задаётся отдельно. Установщик проверит доверенный HTTPS кабинета, закрытые маршруты и готовность внутренних сервисов; в `runtime/state.json` и `status` останется отметка `ingestDnsPending`. Owner можно создать и сохранить сразу. Внешний приём ошибок станет доступен после настройки DNS ingest и получения его сертификата. Флаг запрещён при обновлении, повторном запуске уже установленного сервиса и вместе с `--require-ingestion-smoke`.
+
+После появления DNS дождитесь сертификата ingest (при длительном ожидании перезапустите только Caddy), создайте probe-проект по инструкции ниже и выполните `getexception smoke`. Успешная проверка снимет отметку. Только после этого включайте `DEPLOY_ENABLED`. Обычное обновление также проверяет отложенный ingest **до** остановки сервисов и миграций.
+
+### Проверка подписей без GitHub-токена на сервере
+
+На компьютере с настроенным GitHub CLI скачайте артефакты завершённого релиза и публичные доказательства подписи в отдельный каталог:
+
+```bash
+release=FULL_RELEASE_SHA
+mkdir getexception-release
+cd getexception-release
+gh release download "deploy-$release" --repo GetException/GetException \
+  --pattern 'install-getexception.sh*' --pattern 'getexception.tar.gz*'
+gh attestation download getexception.tar.gz --repo GetException/GetException
+gh attestation trusted-root > trusted-root.jsonl
+```
+
+Передайте каталог на сервер по проверенному SSH-соединению. Bundle `sha256:*.jsonl` содержит attestations всех трёх файлов релиза. В командах ниже замените `ATTESTATION_FILE.jsonl` его точным именем. На сервере, внутри переданного каталога:
+
+```bash
+release=FULL_RELEASE_SHA
+sha256sum --check install-getexception.sh.sha256
+gh attestation verify install-getexception.sh --repo GetException/GetException \
+  --bundle ATTESTATION_FILE.jsonl --custom-trusted-root trusted-root.jsonl \
+  --signer-workflow GetException/GetException/.github/workflows/release.yml \
+  --source-ref refs/heads/stable --source-digest "$release"
+bash install-getexception.sh --release "$release" \
+  --attestation-bundle ATTESTATION_FILE.jsonl --trusted-root trusted-root.jsonl \
+  --dashboard-host monitor.example.com --ingest-host ingest.monitor.example.com
+```
+
+Запускайте bootstrap только после успешной проверки checksum и подписи. Оба параметра offline-проверки передаются вместе; controller проверяет архив с теми же ограничениями identity. Токены GitHub на сервер не передаются. Доступ к интернету для скачивания артефактов, образов и HTTPS-сертификатов всё ещё нужен. При следующем обновлении передайте свежие доказательства для нового SHA и те же параметры команде `getexception update` либо настройте обычную онлайн-проверку через `gh auth login`.
 
 После установки:
 

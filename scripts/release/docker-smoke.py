@@ -62,7 +62,7 @@ def main():
         names = ["web", "ingest", "worker", "mail", "migrate"]
         sha = args.published or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         env = {key: value for key, value in os.environ.items() if not key.startswith("SMTP_")}
-        env.update(ACME_EMAIL="admin@example.com", MAIL_ENABLED="false")
+        env.update(ACME_EMAIL="", MAIL_ENABLED="false")
         options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
         if args.build:
             if not args.built:
@@ -89,7 +89,19 @@ def main():
             install_args = ["bash", str(work / "install-getexception.sh"), "--release", sha,
                             "--install-dir", str(root), "--skip-start", "--dashboard-host", "monitor.example.com",
                             "--ingest-host", "ingest.example.com"]
-            run(install_args, env=env)
+            run(["gh", "release", "download", "deploy-" + sha, "--repo", installer.REPOSITORY,
+                 "--pattern", "getexception.tar.gz", "--dir", str(work)])
+            run(["gh", "attestation", "download", str(work / "getexception.tar.gz"), "--repo", installer.REPOSITORY], cwd=work)
+            proofs = list(work.glob("sha256:*.jsonl"))
+            if len(proofs) != 1:
+                raise RuntimeError("Expected a single release attestation bundle")
+            trusted_root = work / "trusted-root.jsonl"
+            with trusted_root.open("w") as stream:
+                run(["gh", "attestation", "trusted-root"], stdout=stream)
+            # The first bootstrap must work without GitHub credentials; repeat with online verification.
+            offline_env = {key: value for key, value in env.items() if key not in ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]}
+            offline_env["GH_CONFIG_DIR"] = str(work / "empty-gh-config")
+            run([*install_args, "--attestation-bundle", str(proofs[0]), "--trusted-root", str(trusted_root)], env=offline_env)
             before = (root / "runtime/.env").read_bytes()
             run(install_args, env=env)
             if (root / "runtime/.env").read_bytes() != before:
@@ -131,7 +143,7 @@ def main():
                                     "--env-file", str(image_env), "-f", str(target / "compose.yaml"),
                                     "-f", str(work / "override.json"), *arguments], redactions, stdout=stdout)
 
-            def smoke(self, target):
+            def smoke(self, target, *, defer_ingest_dns=False):
                 # This test uses a local CA; production smoke never disables certificate verification.
                 for host, path, expected in [("monitor.localhost", "/login", "200"),
                                              ("monitor.localhost", "/health/ready", "404"),

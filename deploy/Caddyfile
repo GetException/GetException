@@ -1,6 +1,6 @@
 {
 	admin off
-	email {$ACME_EMAIL}
+	email "{$ACME_EMAIL}"
 	servers {
 		timeouts {
 			read_header 5s
