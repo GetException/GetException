@@ -1,11 +1,9 @@
 name: Release
 on:
-  push:
-    branches: [stable]
   workflow_dispatch:
     inputs:
       release_sha:
-        description: Exact stable SHA to retry (optional)
+        description: Exact prepared stable SHA to release or retry (optional)
         required: false
         type: string
 permissions:
@@ -22,18 +20,62 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
-      - name: Reject stale or mismatched releases
+      - name: Reject stale, unprepared or mismatched releases
         env:
           REQUESTED_SHA: ${{ inputs.release_sha || github.sha }}
-          EVENT_SHA: ${{ github.sha }}
-          EVENT_REF: ${{ github.ref }}
-        run: |
-          test "$EVENT_REF" = refs/heads/stable
-          test "$REQUESTED_SHA" = "$EVENT_SHA"
-          test "$(git ls-remote origin refs/heads/stable | cut -f1)" = "$EVENT_SHA"
+        run: python3 scripts/release/check-head.py --prepared
   checks:
     needs: prepare-release
     uses: ./.github/workflows/checks.yml
+  publish-packages:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn generate && yarn build
+      - run: python3 scripts/release/check-head.py
+      - name: Publish absent SDK versions with provenance and verify existing versions
+        run: yarn release:packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          YARN_NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          YARN_NPM_PUBLISH_REGISTRY: https://registry.npmjs.org
+  registry-smoke:
+    needs: publish-packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn generate && yarn build
+      - run: yarn release:registry-smoke
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: registry-fixtures
+          path: |
+            .artifacts/registry/browser-spa/dist
+            .artifacts/registry/react-spa/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
   build-images:
     needs: checks
     runs-on: ubuntu-24.04
@@ -153,7 +195,7 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
         run: python3 scripts/release/publish-bootstrap.py
   bootstrap-e2e:
-    needs: publish-bootstrap
+    needs: [publish-bootstrap, registry-smoke]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -176,11 +218,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - run: bash scripts/release/install-browser.sh
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: registry-fixtures
+          path: .artifacts/registry
       - name: Test the published installer, setup, event ingestion and persistent data
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
-        run: python3 scripts/release/docker-smoke.py --published "$RELEASE_SHA"
+        run: python3 scripts/release/docker-smoke.py --published "$RELEASE_SHA" --registry-fixtures
   promote-release:
     needs: bootstrap-e2e
     runs-on: ubuntu-24.04
@@ -202,6 +248,7 @@ jobs:
     environment: production
     permissions:
       contents: read
+      attestations: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -215,5 +262,6 @@ jobs:
           DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
           DEPLOY_SSH_KEY: ${{ secrets.SSH_KEY || secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS || secrets.DEPLOY_KNOWN_HOSTS }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
         run: python3 scripts/release/ssh-deploy.py

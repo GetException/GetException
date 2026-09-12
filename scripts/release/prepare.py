@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create/reuse an SDK release commit, then dispatch SDK publication at that exact commit."""
+"""Create/reuse a version commit, then dispatch the full release at that exact commit."""
 import json
 import os
 from pathlib import Path
@@ -19,18 +19,50 @@ def run(*args):
     return result.stdout.strip()
 
 
+def prepared_source(commit):
+    message = run("git", "log", "-1", "--format=%B", commit)
+    markers = [line for line in message.splitlines() if line.startswith("Release-Source:")]
+    if not markers:
+        return None
+    if len(markers) != 1 or not re.fullmatch(r"Release-Source: [a-f0-9]{40}", markers[0]):
+        raise RuntimeError("Invalid release source marker")
+    source = markers[0].split()[1]
+    if run("git", "log", "-1", "--format=%P", commit) != source:
+        raise RuntimeError("Release commit must be a direct child of its source")
+    paths = ["packages/" + name + "/package.json" for name in ["browser", "react"]]
+    changed = set(run("git", "diff", "--name-only", source, commit).splitlines())
+    if not set(paths) <= changed <= set(paths) | {"yarn.lock"}:
+        raise RuntimeError("Unexpected files in the prepared release commit")
+    versions = []
+    for path in paths:
+        before = json.loads(run("git", "show", source + ":" + path))
+        after = json.loads(run("git", "show", commit + ":" + path))
+        if not isinstance(before.get("version"), str) or not re.fullmatch(r"\d+\.\d+\.\d+", before["version"]):
+            raise RuntimeError("Invalid source SDK version")
+        major, minor, patch = map(int, before["version"].split("."))
+        before["version"] = f"{major}.{minor}.{patch + 1}"
+        if after != before:
+            raise RuntimeError("Prepared manifests must only increment the SDK patch version")
+        versions.append(after["version"])
+    if len(set(versions)) != 1 or message.splitlines()[0] != "chore: release SDK " + versions[0] + " [skip ci]":
+        raise RuntimeError("Prepared release subject or SDK versions do not match")
+    return source
+
+
 def prepare(source):
     if not re.fullmatch(r"[a-f0-9]{40}", source):
         raise RuntimeError("Invalid source SHA")
     run("git", "fetch", "origin", "stable")
     remote = run("git", "rev-parse", "origin/stable")
     marker = "Release-Source: " + source
-    message = run("git", "log", "-1", "--format=%B", remote)
     if remote != source:
-        if marker not in message.splitlines() or run("git", "rev-parse", remote + "^") != source:
+        if prepared_source(remote) != source:
             raise RuntimeError("stable advanced; refusing to release outdated code")
         run("git", "checkout", "--detach", remote)
         return remote
+    if prepared_source(source):
+        run("git", "checkout", "--detach", source)
+        return source
     run("git", "checkout", "--detach", source)
     manifests = [Path("packages") / name / "package.json" for name in ["browser", "react"]]
     versions = [json.loads(path.read_text())["version"] for path in manifests]
@@ -48,9 +80,9 @@ def prepare(source):
     run("git", "-c", "user.name=github-actions[bot]", "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
         "commit", "-m", "chore: release SDK " + version + " [skip ci]", "-m", marker)
     sha = run("git", "rev-parse", "HEAD")
-    changed = set(run("git", "diff", "--name-only", source + ".." + sha).splitlines())
-    if not changed <= {str(path) for path in manifests} | {"yarn.lock"}:
-        raise RuntimeError("Unexpected files in the automated release commit")
+    if prepared_source(sha) != source:
+        raise RuntimeError("Unexpected release source")
+    run("git", "diff", "--exit-code")
     run(str(Path(".artifacts/tools/gitleaks").resolve()), "git", "--log-opts=" + source + ".." + sha, "--redact", "--no-banner")
     # A concurrent push fails normally; no force push and no stale release.
     run("git", "push", "origin", "HEAD:stable")
@@ -63,5 +95,5 @@ if __name__ == "__main__":
     if run("git", "rev-parse", "origin/stable") != sha:
         raise RuntimeError("stable changed before dispatch")
     # A separate dispatch gives provenance the release commit as GITHUB_SHA.
-    run("gh", "workflow", "run", "sdk-release.yml", "--ref", "stable", "-f", "release_sha=" + sha)
+    run("gh", "workflow", "run", "release.yml", "--ref", "stable", "-f", "release_sha=" + sha)
     print("Release prepared and dispatched: " + sha)

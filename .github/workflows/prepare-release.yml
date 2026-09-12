@@ -1,5 +1,7 @@
-name: Prepare SDK release
+name: Prepare release
 on:
+  push:
+    branches: [stable]
   workflow_dispatch:
 permissions:
   contents: read
@@ -7,10 +9,7 @@ concurrency:
   group: getexception-release
   cancel-in-progress: false
 jobs:
-  checks:
-    uses: ./.github/workflows/checks.yml
   prepare-release:
-    needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -48,7 +47,7 @@ jobs:
       - run: yarn ci:tools
       - run: yarn local:mailpit
       - run: bash scripts/release/install-browser.sh
-      - name: Prepare SDK release commit and dispatch its exact SHA
+      - name: Prepare release commit and dispatch its exact SHA
         run: python3 scripts/release/prepare.py
         env:
           SOURCE_SHA: ${{ github.sha }}

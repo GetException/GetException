@@ -7,6 +7,7 @@ import { parse } from "yaml";
 
 type Workflow = {
   on: Record<string, unknown>;
+  concurrency: { group: string; "cancel-in-progress": boolean };
   jobs: Record<
     string,
     {
@@ -35,9 +36,9 @@ function dependencies(config: Workflow, job: string): string[] {
     .flatMap((name) => [name, ...dependencies(config, name)]);
 }
 
-describe("independent server and SDK releases", () => {
+describe("automatic SDK and server release", () => {
   it("uploads required reports and fixtures from the hidden artifacts directory", () => {
-    for (const name of ["release", "sdk-release"]) {
+    for (const name of ["release", "prepare-release"]) {
       const steps = Object.values(workflow(name).jobs).flatMap(
         (job) => job.steps ?? [],
       );
@@ -55,22 +56,24 @@ describe("independent server and SDK releases", () => {
     }
   });
 
-  it("can deploy a stable push without npm credentials or SDK publication", () => {
+  it("requires published SDKs, images and their joint verification before deployment", () => {
     const config = workflow("release");
     const jobs = dependencies(config, "deploy");
 
-    expect(config.on.push).toEqual({ branches: ["stable"] });
+    expect(workflow("prepare-release").on.push).toEqual({
+      branches: ["stable"],
+    });
+    expect(Object.keys(config.on)).toEqual(["workflow_dispatch"]);
     expect(jobs).toEqual(
       expect.arrayContaining([
         "checks",
+        "publish-packages",
+        "registry-smoke",
         "build-images",
         "publish-bootstrap",
         "bootstrap-e2e",
         "promote-release",
       ]),
-    );
-    expect(JSON.stringify(config)).not.toMatch(
-      /NPM_TOKEN|release:packages|release:registry-smoke|Release-Source:/,
     );
     expect(JSON.stringify(config.jobs["build-images"])).toContain(
       "--fail-on critical",
@@ -79,28 +82,25 @@ describe("independent server and SDK releases", () => {
       "--published",
     );
     expect(JSON.stringify(config.jobs["bootstrap-e2e"])).toContain(
+      "--registry-fixtures",
+    );
+    expect(JSON.stringify(config.jobs["bootstrap-e2e"])).toContain(
       "yarn generate && yarn build",
     );
   });
 
-  it("publishes SDKs only through manual workflows and validates registry packages", () => {
-    const config = workflow("sdk-release");
+  it("serializes preparation and publication and gives npm credentials only to the publish step", () => {
+    const config = workflow("release");
 
-    expect(Object.keys(workflow("prepare-release").on)).toEqual([
-      "workflow_dispatch",
-    ]);
-    expect(Object.keys(config.on)).toEqual(["workflow_dispatch"]);
-    expect(dependencies(config, "sdk-e2e")).toEqual(
-      expect.arrayContaining(["checks", "publish-packages", "registry-smoke"]),
-    );
-    expect(JSON.stringify(config.jobs["sdk-e2e"])).toContain(
-      "--registry-fixtures",
-    );
-    expect(config.jobs.deploy).toBeUndefined();
+    expect(workflow("prepare-release").concurrency).toEqual(config.concurrency);
+    expect(config.concurrency["cancel-in-progress"]).toBe(false);
 
     for (const [name, job] of Object.entries(config.jobs)) {
-      if (name !== "publish-packages") {
-        expect(JSON.stringify(job)).not.toContain("NPM_TOKEN");
+      for (const step of job.steps ?? []) {
+        if (JSON.stringify(step).includes("secrets.NPM_TOKEN")) {
+          expect(name).toBe("publish-packages");
+          expect(step.run).toBe("yarn release:packages");
+        }
       }
     }
   });
@@ -140,7 +140,7 @@ describe("independent server and SDK releases", () => {
     expect(JSON.stringify(config)).not.toMatch(
       /RELEASE_TOKEN|NPM_TOKEN|SSH_KEY }}/,
     );
-    expect(JSON.stringify(workflow("sdk-release"))).not.toContain("DEPLOY_KEY");
+    expect(JSON.stringify(workflow("release"))).not.toContain("DEPLOY_KEY");
   });
 
   it("uses the configured server credentials independently from the repository deploy key", () => {
@@ -157,7 +157,9 @@ describe("independent server and SDK releases", () => {
       DEPLOY_KNOWN_HOSTS:
         "${{ secrets.SSH_KNOWN_HOSTS || secrets.DEPLOY_KNOWN_HOSTS }}",
       RELEASE_SHA: "${{ github.sha }}",
+      GH_TOKEN: "${{ github.token }}",
     });
+    expect(job.permissions?.attestations).toBe("read");
     expect(JSON.stringify(job)).not.toContain("secrets.DEPLOY_KEY");
   });
 

@@ -109,6 +109,35 @@ class PrepareReleaseTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "HEAD"), self.source)
         self.assertEqual(self.git("rev-parse", "origin/stable"), self.source)
 
+    def test_manual_retry_on_prepared_stable_keeps_the_same_version(self):
+        released = self.prepare()
+        self.source = released
+        self.commands.clear()
+        self.assertEqual(self.prepare(), released)
+        self.assertFalse(any(command[0] == "corepack" for command in self.commands))
+
+    def test_extra_changes_cannot_masquerade_as_a_release_commit(self):
+        self.prepare()
+        Path("unexpected.txt").write_text("not a version change")
+        self.git("add", "unexpected.txt")
+        self.git("commit", "--amend", "--no-edit")
+        with self.assertRaisesRegex(RuntimeError, "Unexpected files"):
+            prepare.prepared_source(self.git("rev-parse", "HEAD"))
+
+    def test_release_guard_rejects_unprepared_or_stale_or_wrong_branch(self):
+        guard = path.with_name("check-head.py")
+
+        def check(sha, branch="refs/heads/stable"):
+            return subprocess.run(["python3", str(guard), "--prepared"], capture_output=True,
+                                  env={**os.environ, "GITHUB_SHA": sha, "GITHUB_REF": branch,
+                                       "REQUESTED_SHA": sha}).returncode
+
+        self.assertNotEqual(check(self.source), 0)
+        released = self.prepare()
+        self.assertEqual(check(released), 0)
+        self.assertNotEqual(check(released, "refs/heads/feature"), 0)
+        self.assertNotEqual(check(self.source), 0)
+
     def test_unrelated_remote_commit_prevents_version_bump(self):
         Path("new-work.txt").write_text("another developer's change\n")
         self.git("add", "new-work.txt")
