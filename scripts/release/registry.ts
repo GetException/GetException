@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
+import { stringify } from "yaml";
+import { registryConsumerConfig } from "./consumer-config";
 
 const names = ["browser", "react"] as const;
 const root = resolve(".artifacts/registry");
@@ -145,7 +147,7 @@ if (!publish) {
   );
   writeFileSync(
     resolve(root, ".yarnrc.yml"),
-    "nodeLinker: node-modules\nenableScripts: false\n",
+    stringify(registryConsumerConfig(version)),
   );
   yarn(["install", "--no-immutable", "--mode=skip-build"], root);
   yarn(["install", "--immutable", "--mode=skip-build"], root);

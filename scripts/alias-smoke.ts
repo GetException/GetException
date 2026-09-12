@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { stringify } from "yaml";
+import { registryConsumerConfig } from "./release/consumer-config";
 
 const sdkVersion = JSON.parse(
   readFileSync("packages/browser/package.json", "utf8"),
@@ -112,9 +114,9 @@ const server = createServer((request, response) => {
       "dist-tags": { latest: sdkVersion },
       versions: { [sdkVersion]: version },
       time: {
-        created: "2026-01-01T00:00:00.000Z",
-        modified: "2026-01-01T00:00:00.000Z",
-        [sdkVersion]: "2026-01-01T00:00:00.000Z",
+        created: new Date().toISOString(),
+        modified: new Date().toISOString(),
+        [sdkVersion]: new Date().toISOString(),
       },
     }),
   );
@@ -149,7 +151,13 @@ try {
   );
   writeFileSync(
     join(directory, ".yarnrc.yml"),
-    `nodeLinker: node-modules\nglobalFolder: ${join(directory, ".yarn-global")}\nenableScripts: false\nenableTelemetry: false\nunsafeHttpWhitelist: [127.0.0.1]\nnpmScopes:\n  getexception:\n    npmRegistryServer: ${origin}\n`,
+    stringify({
+      ...registryConsumerConfig(sdkVersion),
+      globalFolder: join(directory, ".yarn-global"),
+      enableTelemetry: false,
+      unsafeHttpWhitelist: ["127.0.0.1"],
+      npmScopes: { getexception: { npmRegistryServer: origin } },
+    }),
   );
   await run(
     "corepack",
