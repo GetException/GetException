@@ -69,8 +69,13 @@ export function ProjectForm() {
         />
       </Field.Root>
       <p className="muted small">
-        An origin includes its protocol and port. It filters browser traffic; a
-        public DSN grants no access to stored errors.
+        Include the protocol and port, for example https://app.example.com or
+        http://localhost:8080. HTTP is allowed only for localhost, 127.0.0.1 and
+        [::1]. Local events must use environment: development.
+      </p>
+      <p className="muted small">
+        Origins filter browser traffic; a public DSN grants no access to stored
+        errors.
       </p>
     </Form>
   );

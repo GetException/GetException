@@ -6,6 +6,8 @@
 
 React заявлен как peer dependency `^18.0.0 || ^19.0.0`. Docker-тест приёма событий использует React 18.3.1, проверка npm alias и TypeScript-контракта — React 19.2.8. Серверный SDK для Node.js/Next.js в этот пакет не входит.
 
+Для локального приложения можно добавить точный origin, например `http://localhost:8080`, `http://127.0.0.1:8080` или `http://[::1]:8080`, даже если GetException установлен на публичном домене. Укажите `environment: "development"` в `init`: события с loopback Origin и окружением `production`/`staging` отклоняются. DSN и приём событий остаются HTTPS. Протокол, hostname и порт должны совпадать с Allowed origins; wildcard и HTTP на других hosts запрещены.
+
 Основа — официальные `@sentry/browser` и `@sentry/react` **10.73.0**. Зависимости установлены под внутренними npm alias `@getexception/sentry-browser` и `@getexception/sentry-react`, чтобы пользовательский alias Sentry → GetException не создавал рекурсию. Import не вызывает `init`, не подключает обработчики и ничего не отправляет. Внутренняя конфигурация Sentry использует технический числовой project ID: его validator не принимает UUID с буквенным префиксом. Собственный transport всегда отправляет по исходному UUID из DSN, а внутренний DSN не попадает в Envelope. Это проверяется отдельно с настоящим SDK.
 
 | API                                  | Поддержка и отличие                                                                                                                                                                        |

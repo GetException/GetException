@@ -1,4 +1,5 @@
 import { BucketLimiter } from "./bucket-limiter";
+import { isLoopbackOrigin } from "@getexception/config";
 import { readEnvelopeBody, respond } from "./http";
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
@@ -216,6 +217,14 @@ export function createIngestServer(db: IngestDatabase, options: IngestOptions) {
             Date.now() / 1000,
             configs[0]!.allowedTags,
           );
+
+          if (
+            origin &&
+            isLoopbackOrigin(origin) &&
+            event.environment !== "development"
+          ) {
+            return respond(res, 403);
+          }
 
           // createMany avoids RETURNING: ingest has INSERT but no SELECT permission on inbox.
           await db.eventInbox.createMany({

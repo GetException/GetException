@@ -101,10 +101,22 @@ test("installed release: setup, real SDK events and preserved login", async ({
     await page.goto(origin + "/projects/new");
     await page.getByLabel("Project name").fill("Release validation");
     await page.getByLabel("Project slug").fill("release-validation");
+    await page.getByLabel(/Allowed origins/).fill("http://app.example.com");
+    const invalidOrigin = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/dashboard/projects") &&
+        response.request().method() === "POST",
+    );
+
+    await page
+      .getByRole("button", { name: "Create project", exact: true })
+      .click();
+    expect((await invalidOrigin).status()).toBe(400);
+    await expect(page.getByText(/Enter an exact HTTPS origin/)).toBeVisible();
     await page
       .getByLabel(/Allowed origins/)
       .fill(
-        "https://browser.monitor.localhost\nhttps://react.monitor.localhost",
+        "https://browser.monitor.localhost\nhttps://react.monitor.localhost\nhttp://localhost:8080",
       );
     await page
       .getByRole("button", { name: "Create project", exact: true })

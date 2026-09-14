@@ -100,6 +100,22 @@ export function mailConfig(
   return { ...base, ...config, MAIL_ENABLED: true as const };
 }
 
+const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+export function isLoopbackOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+
+    return (
+      ["http:", "https:"].includes(url.protocol) &&
+      url.origin === value &&
+      loopbackHosts.has(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function canonicalOrigin(value: string, allowLocal = false): string {
   const url = new URL(value);
 
@@ -108,12 +124,13 @@ export function canonicalOrigin(value: string, allowLocal = false): string {
     url.password ||
     url.search ||
     url.hash ||
+    url.hostname.includes("*") ||
     url.pathname !== "/" ||
     (url.protocol !== "https:" &&
       !(
         allowLocal &&
         url.protocol === "http:" &&
-        ["localhost", "127.0.0.1"].includes(url.hostname)
+        loopbackHosts.has(url.hostname)
       ))
   ) {
     throw new Error("Invalid origin");

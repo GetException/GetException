@@ -19,18 +19,7 @@ export async function createProject(
     })
     .strict()
     .parse(input);
-  const origins = [
-    ...new Set(
-      data.origins.map((value) =>
-        canonicalOrigin(
-          value,
-          new URL(service.config.DASHBOARD_ORIGIN).hostname.endsWith(
-            ".localhost",
-          ),
-        ),
-      ),
-    ),
-  ];
+  const origins = [...new Set(data.origins.map(projectOrigin))];
   const key = token();
   const id = randomUUID();
 
@@ -63,4 +52,13 @@ export async function createProject(
   url.pathname = `/${id}`;
 
   return { id, dsn: url.toString() };
+}
+
+function projectOrigin(value: string): string {
+  try {
+    // The monitored application can run locally while the dashboard is hosted remotely.
+    return canonicalOrigin(value, true);
+  } catch {
+    throw new AuthError(400, "project_origin");
+  }
 }

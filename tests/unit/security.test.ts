@@ -13,6 +13,7 @@ import {
   webConfig,
   workerConcurrency,
   canonicalOrigin,
+  isLoopbackOrigin,
 } from "@getexception/config";
 import { allowedDependency } from "../../scripts/architecture";
 import {
@@ -74,6 +75,43 @@ describe("MFA cryptographic boundary", () => {
     );
     expect(() => canonicalOrigin("https://app.example.com/path")).toThrow();
     expect(() => canonicalOrigin("http://app.example.com")).toThrow();
+  });
+});
+
+describe("explicit local application origins", () => {
+  it.each([
+    "http://localhost:8080",
+    "http://127.0.0.1:5173",
+    "http://[::1]:8080",
+  ])("allows %s only when local origins are explicitly enabled", (origin) => {
+    expect(() => canonicalOrigin(origin)).toThrow();
+    expect(canonicalOrigin(origin, true)).toBe(origin);
+    expect(isLoopbackOrigin(origin)).toBe(true);
+  });
+
+  it.each([
+    "not a URL",
+    "null",
+    "http://app.example.com",
+    "http://localhost.example.com:8080",
+    "http://192.168.1.1:8080",
+    "http://localhost:8080/path",
+    "http://localhost:8080?query=value",
+    "http://localhost:8080#fragment",
+    "http://user@localhost:8080",
+    "ftp://localhost:8080",
+    "https://*.example.com",
+  ])("rejects invalid project origin %s", (origin) => {
+    expect(() => canonicalOrigin(origin, true)).toThrow();
+  });
+
+  it("keeps HTTPS applications and exact host matching", () => {
+    expect(canonicalOrigin("https://app.example.com/", true)).toBe(
+      "https://app.example.com",
+    );
+    expect(isLoopbackOrigin("https://localhost:8080")).toBe(true);
+    expect(isLoopbackOrigin("http://localhost.example.com:8080")).toBe(false);
+    expect(isLoopbackOrigin("not a URL")).toBe(false);
   });
 });
 it("enforces architecture boundaries and groups stable causes", () => {
