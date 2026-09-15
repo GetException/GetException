@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Control } from "./Control";
 import { Form } from "./Form";
 
-export function StepUpForm() {
+export function StepUpForm({ onSuccess }: { onSuccess?: () => void } = {}) {
   const [done, setDone] = useState(false);
 
   return (
@@ -24,6 +24,7 @@ export function StepUpForm() {
             trustDevice: false,
           });
           setDone(true);
+          onSuccess?.();
         }}
       >
         <Control

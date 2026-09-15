@@ -15,7 +15,10 @@ export default async function EditTeamPage({
   const [team, members, projects] = await Promise.all([
     db.team.findFirst({
       where: { id, organizationId: member.organizationId },
-      include: { members: true, projects: true },
+      include: {
+        members: true,
+        projects: { where: { project: { deletedAt: null } } },
+      },
     }),
     db.member.findMany({
       where: { organizationId: member.organizationId },
@@ -23,7 +26,7 @@ export default async function EditTeamPage({
       orderBy: { createdAt: "asc" },
     }),
     db.project.findMany({
-      where: { organizationId: member.organizationId },
+      where: { organizationId: member.organizationId, deletedAt: null },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),

@@ -2,7 +2,7 @@ import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -162,14 +162,13 @@ export async function temporaryDatabase() {
 }
 
 export const migrationFiles = () =>
-  [
-    "202609070001_initial",
-    "202609070002_boundaries",
-    "202609080003_issue_workflow",
-    "202609080004_members_invitations",
-  ].map((name) =>
-    readFileSync(
-      join("packages/db/prisma/migrations", name, "migration.sql"),
-      "utf8",
-    ),
-  );
+  readdirSync("packages/db/prisma/migrations", { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+    .map((name) =>
+      readFileSync(
+        join("packages/db/prisma/migrations", name, "migration.sql"),
+        "utf8",
+      ),
+    );

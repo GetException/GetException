@@ -107,6 +107,14 @@ export async function safeRoute(fn: () => Promise<Response>) {
       owner_mfa:
         "This member must enable an authenticator in Settings before becoming an Owner.",
       project_team: "Every project must belong to at least one team.",
+      project_slug:
+        "A project with this slug already exists. Choose another slug.",
+      project_missing:
+        "This project no longer exists or is unavailable to you.",
+      project_confirmation:
+        "Enter the current project slug exactly to confirm deletion.",
+      project_expired:
+        "The seven-day recovery period has ended. This project can no longer be restored.",
       project_origin:
         "Enter an exact HTTPS origin without a path, credentials, query or fragment. HTTP is allowed only for localhost, 127.0.0.1 and [::1], with an optional port.",
     };

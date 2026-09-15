@@ -7,10 +7,12 @@ export function Form({
   children,
   submit,
   button,
+  danger = false,
 }: {
   children: ReactNode;
   submit: (data: FormData) => Promise<void>;
   button: string;
+  danger?: boolean;
 }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,7 +41,11 @@ export function Form({
           {error}
         </p>
       )}
-      <Button type="submit" className="button primary" disabled={busy}>
+      <Button
+        type="submit"
+        className={`button ${danger ? "danger" : "primary"}`}
+        disabled={busy}
+      >
         {busy ? "Please wait…" : button}
         <span aria-hidden="true">↗</span>
       </Button>

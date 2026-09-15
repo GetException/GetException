@@ -709,7 +709,8 @@ describe("durable inbox and separate SQL roles", () => {
     await upgrade.connect();
 
     try {
-      const [initial, boundaries, workflow, invitations] = migrationFiles();
+      const [initial, boundaries, workflow, invitations, projectLifecycle] =
+        migrationFiles();
 
       await upgrade.query(initial!);
       await upgrade.query(
@@ -752,6 +753,27 @@ describe("durable inbox and separate SQL roles", () => {
         (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
           ?.version,
       ).toBe(3);
+      await upgrade.query(
+        "INSERT INTO workspace(id, name, slug) VALUES ('upgrade-workspace', 'Existing workspace', 'existing')",
+      );
+      await upgrade.query(
+        "INSERT INTO project(id, \"organizationId\", name, slug) VALUES ('upgrade-project', 'upgrade-workspace', 'Existing project', 'existing-project')",
+      );
+      await upgrade.query(projectLifecycle!);
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rowCount,
+      ).toBe(0);
+      await upgrade.query(
+        "INSERT INTO _prisma_migrations(finished_at) VALUES (now())",
+      );
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
+          ?.version,
+      ).toBe(4);
+      expect(
+        (await upgrade.query('SELECT name, enabled, "deletedAt" FROM project'))
+          .rows,
+      ).toEqual([{ name: "Existing project", enabled: true, deletedAt: null }]);
       expect(
         (await upgrade.query("SELECT count(*) FROM invitation")).rows[0]?.count,
       ).toBe("0");

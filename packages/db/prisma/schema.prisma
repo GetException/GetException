@@ -242,6 +242,7 @@ model Project {
   name String
   slug String
   enabled Boolean @default(true)
+  deletedAt DateTime? @db.Timestamptz(3)
   dailyQuota Int @default(25000)
   allowedTags String[] @default(["feature","component","operation"])
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -255,6 +256,7 @@ model Project {
   releases Release[]
   stats ProjectDailyStat[]
   @@unique([organizationId,slug])
+  @@index([deletedAt])
   @@map("project")
 }
 model ProjectTeam {

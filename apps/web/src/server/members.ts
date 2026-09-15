@@ -40,7 +40,7 @@ export async function saveTeam(
     if (
       members.length !== data.memberIds.length ||
       (await tx.project.count({
-        where: { id: { in: data.projectIds }, organizationId },
+        where: { id: { in: data.projectIds }, organizationId, deletedAt: null },
       })) !== data.projectIds.length
     ) {
       throw new AuthError(400);
@@ -51,7 +51,10 @@ export async function saveTeam(
     if (teamId) {
       const team = await tx.team.findFirst({
         where: { id: teamId, organizationId },
-        include: { projects: true, members: true },
+        include: {
+          projects: { where: { project: { deletedAt: null } } },
+          members: true,
+        },
       });
 
       if (!team) {
@@ -75,7 +78,9 @@ export async function saveTeam(
         data: { name: data.name },
       });
       await tx.teamMember.deleteMany({ where: { teamId } });
-      await tx.projectTeam.deleteMany({ where: { teamId } });
+      await tx.projectTeam.deleteMany({
+        where: { teamId, project: { deletedAt: null } },
+      });
       const affected = [
         ...new Set([
           ...members.map((member) => member.userId),

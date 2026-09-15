@@ -10,6 +10,7 @@ export interface AccessMember {
 export function projectScope(member: AccessMember): Prisma.ProjectWhereInput {
   return {
     organizationId: member.organizationId,
+    deletedAt: null,
     ...(member.role === "owner"
       ? {}
       : {

@@ -52,6 +52,11 @@ export default async function ProjectPage({
           <p className="muted mono">{project.slug}</p>
         </div>
         <div className="actions">
+          {member.role === "owner" && (
+            <Link className="button" href={`/projects/${id}/settings`}>
+              Project settings
+            </Link>
+          )}
           <Link
             className="button"
             href={linkTo("/releases", { project: project.id })}

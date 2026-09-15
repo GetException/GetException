@@ -208,6 +208,54 @@ test("installed release: setup, real SDK events and preserved login", async ({
     await expect(
       page.getByRole("link", { name: /01234567/ }).first(),
     ).toBeVisible();
+    phase = "project settings and recovery";
+    const projectId = new URL(dsn).pathname.slice(1);
+
+    await page.goto(`${origin}/projects/${projectId}`);
+    await page
+      .getByRole("link", { name: "Project settings", exact: true })
+      .click();
+    await page.getByLabel("Project name").fill("Updated validation project");
+    await page
+      .getByLabel(/Allowed origins/)
+      .fill(
+        "https://browser.monitor.localhost\nhttps://react.monitor.localhost\nhttp://localhost:8080\nhttp://localhost:3000",
+      );
+    await page
+      .getByRole("button", { name: "Save changes", exact: true })
+      .click();
+    await expect(page.getByRole("status")).toContainText("Project saved");
+    await page.reload();
+    await expect(page.getByLabel("Project name")).toHaveValue(
+      "Updated validation project",
+    );
+    await expect(page.getByLabel(/Allowed origins/)).toHaveValue(
+      /http:\/\/localhost:3000/,
+    );
+    await page.getByLabel("Confirm project slug").fill("wrong-slug");
+    await page
+      .getByRole("button", { name: "Delete project", exact: true })
+      .click();
+    await expect(page.getByRole("alert")).toContainText("current project slug");
+    await page.getByLabel("Confirm project slug").fill("release-validation");
+    await page
+      .getByRole("button", { name: "Delete project", exact: true })
+      .click();
+    await expect(page).toHaveURL(origin + "/projects/deleted");
+    await expect(
+      page.getByRole("heading", {
+        name: "Updated validation project",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Restore project", exact: true })
+      .click();
+    await expect(page).toHaveURL(`${origin}/projects/${projectId}`);
+    await page.getByRole("link", { name: "View issues", exact: false }).click();
+    await expect(
+      page.getByText("Browser fixture error", { exact: false }).first(),
+    ).toBeVisible();
     phase = "origin isolation";
     const isolated = await context.newPage();
     const outgoing = isolated.waitForRequest(

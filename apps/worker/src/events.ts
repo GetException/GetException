@@ -24,7 +24,7 @@ export async function claim(db: Database, now = new Date()) {
     async (tx) => {
       const ids = await tx.$queryRaw<
         { id: string }[]
-      >`SELECT id FROM event_inbox WHERE "projectId" IS NOT NULL AND attempts < ${MAX_ATTEMPTS} AND ((status = 'pending' AND "nextAttemptAt" <= ${now}) OR (status = 'processing' AND "leaseUntil" < ${now})) ORDER BY "receivedAt", id FOR UPDATE SKIP LOCKED LIMIT 1`;
+      >`SELECT id FROM event_inbox WHERE "projectId" IS NOT NULL AND EXISTS (SELECT 1 FROM project WHERE project.id = event_inbox."projectId" AND project."deletedAt" IS NULL) AND attempts < ${MAX_ATTEMPTS} AND ((status = 'pending' AND "nextAttemptAt" <= ${now}) OR (status = 'processing' AND "leaseUntil" < ${now})) ORDER BY "receivedAt", id FOR UPDATE SKIP LOCKED LIMIT 1`;
 
       if (!ids[0]) {
         return null;
@@ -199,7 +199,10 @@ export async function retainBatch(db: Database, now = new Date(), batch = 100) {
 }
 
 export async function queueMetrics(db: Database) {
-  const where = { status: { in: ["pending", "processing"] } };
+  const where = {
+    status: { in: ["pending", "processing"] },
+    project: { deletedAt: null },
+  };
   const [depth, oldest, dead] = await Promise.all([
     db.eventInbox.count({ where }),
     db.eventInbox.findFirst({

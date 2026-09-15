@@ -11,3 +11,11 @@ prepared commit. With automatic deployment enabled, each push to stable runs thi
 pipeline and updates the existing server after verification. Install a completed, verified release.
 
 Source map upload/symbolication is not implemented in this prototype.
+
+Project settings now support name, slug and allowed-origin changes without changing
+the DSN. Owners can delete projects, restore them within seven days, and let the
+retention worker remove their data after the deadline. Schema version 4 adds this
+lifecycle; existing accounts, projects and events are preserved during migration.
+An application-only rollback to a schema-3 release is incompatible. If disaster
+recovery is needed, use the verified backup and its matching release as described
+in the deployment guide.

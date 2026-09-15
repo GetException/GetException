@@ -1272,6 +1272,13 @@ tbody tr:hover {
   align-items: start;
   gap: 24px;
 }
+.button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.danger-panel {
+  border-color: #583941;
+}
 .settings-columns > .form-panel {
   margin-top: 0;
 }

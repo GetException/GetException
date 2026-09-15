@@ -1,7 +1,9 @@
 import { ownerTransaction } from "./owner-transaction";
 import { randomUUID } from "node:crypto";
+import type { Transaction } from "@getexception/db";
+import { projectInput } from "./project-input";
 import { z } from "zod";
-import { canonicalOrigin } from "@getexception/config";
+import { projectPurgeAt } from "../lib/project-lifecycle";
 import { AuthError } from "./auth-error";
 import { type AuthService } from "./auth-service";
 import { digest, token } from "./crypto";
@@ -11,19 +13,12 @@ export async function createProject(
   headers: Headers,
   input: unknown,
 ) {
-  const data = z
-    .object({
-      name: z.string().trim().min(1).max(80),
-      slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
-      origins: z.array(z.string().max(300)).min(1).max(20),
-    })
-    .strict()
-    .parse(input);
-  const origins = [...new Set(data.origins.map(projectOrigin))];
+  const data = projectInput.parse(input);
   const key = token();
   const id = randomUUID();
 
   await ownerTransaction(service, headers, async (tx, current) => {
+    await checkSlug(tx, current.member.organizationId, data.slug);
     const team = await tx.team.findFirst({
       where: { organizationId: current.member.organizationId },
       orderBy: { createdAt: "asc" },
@@ -39,7 +34,7 @@ export async function createProject(
         name: data.name,
         slug: data.slug,
         organizationId: current.member.organizationId,
-        origins: { create: origins.map((origin) => ({ origin })) },
+        origins: { create: data.origins.map((origin) => ({ origin })) },
         keys: { create: { keyHash: digest(key) } },
         teams: { create: { teamId: team.id } },
       },
@@ -54,11 +49,130 @@ export async function createProject(
   return { id, dsn: url.toString() };
 }
 
-function projectOrigin(value: string): string {
-  try {
-    // The monitored application can run locally while the dashboard is hosted remotely.
-    return canonicalOrigin(value, true);
-  } catch {
-    throw new AuthError(400, "project_origin");
+export async function updateProject(
+  service: AuthService,
+  headers: Headers,
+  id: string,
+  input: unknown,
+) {
+  const data = projectInput.parse(input);
+
+  return ownerTransaction(service, headers, async (tx, current) => {
+    const organizationId = current.member.organizationId;
+    const project = await tx.project.findFirst({
+      where: { id, organizationId, deletedAt: null },
+    });
+
+    if (!project) {
+      throw new AuthError(404, "project_missing");
+    }
+
+    await checkSlug(tx, organizationId, data.slug, id);
+    await tx.project.update({
+      where: { id },
+      data: {
+        name: data.name,
+        slug: data.slug,
+        origins: {
+          deleteMany: {},
+          create: data.origins.map((origin) => ({ origin })),
+        },
+      },
+    });
+    await service.audit(tx, "project_update", true, current.user.id);
+
+    return { id };
+  });
+}
+
+export async function deleteProject(
+  service: AuthService,
+  headers: Headers,
+  id: string,
+  input: unknown,
+) {
+  const data = z
+    .object({ slug: z.string().max(64) })
+    .strict()
+    .parse(input);
+
+  return ownerTransaction(service, headers, async (tx, current) => {
+    const project = await tx.project.findFirst({
+      where: {
+        id,
+        organizationId: current.member.organizationId,
+        deletedAt: null,
+      },
+    });
+
+    if (!project) {
+      throw new AuthError(404, "project_missing");
+    }
+
+    if (data.slug !== project.slug) {
+      throw new AuthError(400, "project_confirmation");
+    }
+
+    const deletedAt = new Date();
+
+    await tx.project.update({
+      where: { id },
+      data: { enabled: false, deletedAt },
+    });
+    await service.audit(tx, "project_delete", true, current.user.id);
+
+    return { id, purgeAt: projectPurgeAt(deletedAt).toISOString() };
+  });
+}
+
+export async function restoreProject(
+  service: AuthService,
+  headers: Headers,
+  id: string,
+  input: unknown,
+) {
+  z.object({}).strict().parse(input);
+
+  return ownerTransaction(service, headers, async (tx, current) => {
+    // Serialize restoration with the retention worker's first destructive batch.
+    await tx.$queryRaw`SELECT id FROM project WHERE id = ${id} AND "organizationId" = ${current.member.organizationId} FOR UPDATE`;
+    const project = await tx.project.findFirst({
+      where: { id, organizationId: current.member.organizationId },
+    });
+
+    if (!project?.deletedAt) {
+      throw new AuthError(404, "project_missing");
+    }
+
+    if (projectPurgeAt(project.deletedAt).getTime() <= Date.now()) {
+      throw new AuthError(409, "project_expired");
+    }
+
+    await tx.project.update({
+      where: { id },
+      data: { enabled: true, deletedAt: null },
+    });
+    await service.audit(tx, "project_restore", true, current.user.id);
+
+    return { id };
+  });
+}
+
+async function checkSlug(
+  tx: Transaction,
+  organizationId: string,
+  slug: string,
+  exceptId?: string,
+) {
+  if (
+    await tx.project.count({
+      where: {
+        organizationId,
+        slug,
+        ...(exceptId ? { id: { not: exceptId } } : {}),
+      },
+    })
+  ) {
+    throw new AuthError(409, "project_slug");
   }
 }

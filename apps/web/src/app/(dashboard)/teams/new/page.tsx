@@ -13,7 +13,7 @@ export default async function NewTeamPage() {
       orderBy: { createdAt: "asc" },
     }),
     db.project.findMany({
-      where: { organizationId: member.organizationId },
+      where: { organizationId: member.organizationId, deletedAt: null },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),

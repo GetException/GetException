@@ -3,6 +3,7 @@ import { setTimeout } from "node:timers/promises";
 import { createDatabase, assertSchema } from "@getexception/db";
 import { workerConcurrency, logCode } from "@getexception/config";
 import { queueMetrics, retainBatch, runOne } from "./events";
+import { purgeDeletedProjectBatch } from "./project-retention";
 
 async function main() {
   const mode = process.env.WORKER_MODE ?? "worker-events";
@@ -61,6 +62,10 @@ async function main() {
   async function loop() {
     while (!stopping) {
       try {
+        if (mode === "worker-retention") {
+          await purgeDeletedProjectBatch(db);
+        }
+
         const worked =
           mode === "worker-events" ? await runOne(db) : await retainBatch(db);
 

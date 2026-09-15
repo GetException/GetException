@@ -53,9 +53,14 @@ export default async function ProjectsPage({
         description="One place for each application, its errors, and its releases."
         action={
           member.role === "owner" && (
-            <Link className="button primary" href="/projects/new">
-              ＋ Create project
-            </Link>
+            <div className="actions">
+              <Link className="button" href="/projects/deleted">
+                Deleted projects
+              </Link>
+              <Link className="button primary" href="/projects/new">
+                ＋ Create project
+              </Link>
+            </div>
           )
         }
       />

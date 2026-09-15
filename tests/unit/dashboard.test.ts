@@ -41,7 +41,11 @@ describe("dashboard query boundaries", () => {
         7 * 86400_000,
       ),
     ).toEqual({
-      project: { organizationId: "current-workspace", id: "foreign-project" },
+      project: {
+        organizationId: "current-workspace",
+        id: "foreign-project",
+        deletedAt: null,
+      },
       status: "open",
       regression: true,
       lastSeen: { gte: new Date(0) },
