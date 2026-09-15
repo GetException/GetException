@@ -236,7 +236,9 @@ test("installed release: setup, real SDK events and preserved login", async ({
     await page
       .getByRole("button", { name: "Delete project", exact: true })
       .click();
-    await expect(page.getByRole("alert")).toContainText("current project slug");
+    await expect(
+      page.getByRole("alert").filter({ hasText: "current project slug" }),
+    ).toBeVisible();
     await page.getByLabel("Confirm project slug").fill("release-validation");
     await page
       .getByRole("button", { name: "Delete project", exact: true })
