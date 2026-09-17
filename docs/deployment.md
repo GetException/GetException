@@ -163,7 +163,7 @@ CI выполняет эту команду с дополнительными `-
     deployments/<SHA>/        # публичные доказательства подписи для обновления
 ```
 
-PostgreSQL и Caddy используют именованные Docker volumes с постоянным Compose project name `getexception`. Нельзя менять project name, выполнять `down --volumes` или удалять `runtime` для обычного обновления. В релизном архиве нет source-map storage: загрузка и symbolication карт ещё не реализованы в MVP.
+PostgreSQL и Caddy используют именованные Docker volumes с постоянным Compose project name `getexception`. Нельзя менять project name, выполнять `down --volumes` или удалять `runtime` для обычного обновления. Source maps хранятся в отдельном приватном volume `getexception_source-maps`; ingest и Caddy не имеют доступа. `backup` сохраняет БД, карты нужно резервировать отдельно или восстанавливать из приватных CI-артефактов; см. [event-diagnostics.md](event-diagnostics.md). Текущая схема 6 несовместима с автоматическим откатом на приложения со схемой 4 или 5; для такого восстановления нужна соответствующая резервная копия БД.
 
 В `.env` используется формат `KEY="value"` с JSON escaping и `$$` для буквального `$`, совместимый с Compose. Installer не выполняет этот файл как shell-код. Изменять домены уже настроенного workspace одной заменой env нельзя: домен также закреплён в БД. Такая миграция требует отдельной процедуры.
 
@@ -188,6 +188,6 @@ yarn checks
 
 `ci:tools` один раз скачивает actionlint и gitleaks с закреплёнными SHA256. `yarn checks` включает unit-тесты установщика, проверку workflow, license/secret checks, прежние проверки приложения и PostgreSQL integration tests. На Linux `yarn checks` также выполняет `yarn test:compose`: реальный Docker build/start, update/rollback и restore. Release jobs отдельно проверяют registry и уязвимости образов. Отсутствие Docker в CI считается ошибкой.
 
-Здесь готовится процесс для существующего прототипа. Source maps, S3 backups, внешний rate limiter/WAF и нагрузочные SLO не становятся реализованными от появления workflow; они остаются в [плане](./next-iteration.md). Публичный TLS/SMTP, host firewall, дисковое шифрование и реальные GitHub permissions проверяются при подключении сервера. Подписи и npm provenance можно окончательно проверить только на первом опубликованном релизе.
+Здесь готовится процесс для существующего прототипа. S3 backups, внешний rate limiter/WAF и нагрузочные SLO не становятся реализованными от появления workflow; они остаются в [плане](./next-iteration.md). Публичный TLS/SMTP, host firewall, дисковое шифрование и реальные GitHub permissions проверяются при подключении сервера. Подписи и npm provenance можно окончательно проверить только на первом опубликованном релизе.
 
 Механика основана на официальных интерфейсах [Compose `up --wait`](https://docs.docker.com/reference/cli/docker/compose/up/), [GitHub attestation verification](https://cli.github.com/manual/gh_attestation_verify) и [Yarn npm publish с provenance](https://yarnpkg.com/cli/npm/publish).

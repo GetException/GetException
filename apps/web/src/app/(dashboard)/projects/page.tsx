@@ -39,7 +39,10 @@ export default async function ProjectsPage({
       include: {
         teams: { include: { team: { select: { name: true } } } },
         _count: {
-          select: { issues: { where: { status: "open" } }, events: true },
+          select: {
+            issues: { where: { status: "open", eventCount: { gt: 0 } } },
+            events: true,
+          },
         },
       },
     }),

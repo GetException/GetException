@@ -30,7 +30,7 @@ class PrepareReleaseTests(unittest.TestCase):
         self.git("config", "user.email", "release@example.com")
         self.git("config", "commit.gpgsign", "false")
         self.git("remote", "add", "origin", str(root / "remote.git"))
-        for name in ["browser", "react"]:
+        for name in ["browser", "react", "cli"]:
             manifest = Path("packages") / name / "package.json"
             manifest.parent.mkdir(parents=True)
             manifest.write_text(json.dumps({"name": "@getexception/" + name, "version": "0.1.1"}))
@@ -84,9 +84,9 @@ class PrepareReleaseTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "origin/stable"), released)
         self.assertEqual(self.git("rev-parse", released + "^"), self.source)
         self.assertEqual(set(self.git("diff", "--name-only", self.source, released).splitlines()), {
-            "packages/browser/package.json", "packages/react/package.json", "yarn.lock",
+            "packages/browser/package.json", "packages/react/package.json", "packages/cli/package.json", "yarn.lock",
         })
-        for name in ["browser", "react"]:
+        for name in ["browser", "react", "cli"]:
             self.assertEqual(json.loads((Path("packages") / name / "package.json").read_text())["version"], "0.1.2")
         message = self.git("log", "-1", "--format=%B")
         self.assertIn("[skip ci]", message)

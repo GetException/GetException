@@ -41,6 +41,7 @@ describe("dashboard query boundaries", () => {
         7 * 86400_000,
       ),
     ).toEqual({
+      eventCount: { gt: 0 },
       project: {
         organizationId: "current-workspace",
         id: "foreign-project",

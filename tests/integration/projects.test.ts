@@ -15,6 +15,8 @@ import { runOne, claim } from "../../apps/worker/src/events";
 import { purgeDeletedProjectBatch } from "../../apps/worker/src/project-retention";
 import { digest, token, totp } from "../../apps/web/src/server/crypto";
 import { createIngestServer } from "../../apps/ingest/src/server";
+import { POST as CREATE_MAP_TOKEN } from "../../apps/web/src/app/api/dashboard/projects/[id]/source-map-tokens/route";
+import { DELETE as REVOKE_MAP_TOKEN } from "../../apps/web/src/app/api/dashboard/projects/[id]/source-map-tokens/[tokenId]/route";
 
 let database: Awaited<ReturnType<typeof temporaryDatabase>>;
 let web: ReturnType<typeof createDatabase>;
@@ -347,6 +349,108 @@ it("updates project settings atomically and applies origins without rotating the
   ).toBe(1);
 });
 
+it("creates a hashed, revocable source-map credential only with Owner MFA", async () => {
+  const { id } = await (await create(["https://maps.example.test"])).json();
+  const request = (extra = {}) =>
+    new Request(
+      `${dashboardOrigin}/api/dashboard/projects/${id}/source-map-tokens`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: dashboardOrigin,
+          "Content-Type": "application/json",
+          ...extra,
+        },
+        body: JSON.stringify({ name: "Preview CI" }),
+      },
+    );
+
+  expect(
+    (
+      await CREATE_MAP_TOKEN(request({ Cookie: "" }), {
+        params: Promise.resolve({ id }),
+      })
+    ).status,
+  ).toBe(401);
+  expect(
+    (
+      await CREATE_MAP_TOKEN(
+        request({ Origin: "https://other.example.test" }),
+        { params: Promise.resolve({ id }) },
+      )
+    ).status,
+  ).toBe(403);
+  const created = await CREATE_MAP_TOKEN(request(), {
+    params: Promise.resolve({ id }),
+  });
+
+  expect(created.status).toBe(201);
+  const result = await created.json();
+  const saved = await web.sourceMapToken.findUniqueOrThrow({
+    where: { id: result.id },
+  });
+
+  expect(saved.tokenHash).toBe(digest(result.token));
+  expect(JSON.stringify(saved)).not.toContain(result.token);
+  const member = await web.member.findFirstOrThrow({
+    where: { role: "owner" },
+  });
+
+  try {
+    await database.admin.member.update({
+      where: { id: member.id },
+      data: { role: "developer" },
+    });
+    expect(
+      (await CREATE_MAP_TOKEN(request(), { params: Promise.resolve({ id }) }))
+        .status,
+    ).toBe(403);
+  } finally {
+    await database.admin.member.update({
+      where: { id: member.id },
+      data: { role: "owner" },
+    });
+  }
+
+  const revoked = await REVOKE_MAP_TOKEN(
+    new Request(
+      `${dashboardOrigin}/api/dashboard/projects/${id}/source-map-tokens/${result.id}`,
+      {
+        method: "DELETE",
+        headers: {
+          Cookie: cookie,
+          Origin: dashboardOrigin,
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      },
+    ),
+    { params: Promise.resolve({ id, tokenId: result.id }) },
+  );
+
+  expect(revoked.status).toBe(200);
+  expect(
+    (await web.sourceMapToken.findUniqueOrThrow({ where: { id: result.id } }))
+      .revokedAt,
+  ).not.toBeNull();
+  const verified = await database.admin.session.findFirstOrThrow();
+
+  try {
+    await database.admin.session.updateMany({
+      data: { mfaVerifiedAt: new Date(Date.now() - 301000) },
+    });
+    expect(
+      (await CREATE_MAP_TOKEN(request(), { params: Promise.resolve({ id }) }))
+        .status,
+    ).toBe(428);
+  } finally {
+    await database.admin.session.updateMany({
+      data: { mfaVerifiedAt: verified.mfaVerifiedAt },
+    });
+  }
+});
+
 it("requires Owner, CSRF protection, fresh TOTP and exact confirmation for lifecycle mutations", async () => {
   const { id } = await (await create(["https://access.example.test"])).json();
   const project = await web.project.findUniqueOrThrow({ where: { id } });
@@ -564,6 +668,7 @@ it("disables ingestion, preserves recoverable data, restores the same DSN and pu
   await database.admin.errorEvent.createMany({
     data: Array.from({ length: 500 }, () => ({
       ...stored,
+      originalFrames: [],
       id: randomUUID(),
       eventId: randomUUID().replaceAll("-", ""),
       frames: [],

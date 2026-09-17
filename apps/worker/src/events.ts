@@ -2,6 +2,8 @@ import { fingerprint } from "./fingerprint";
 import { randomUUID } from "node:crypto";
 import { type Database, Prisma } from "@getexception/db";
 import { safeEventSchema } from "@getexception/protocol";
+import { SourceMapStore } from "@getexception/source-maps";
+import { resolveFrames } from "./source-maps/resolve";
 
 const MAX_ATTEMPTS = 5;
 
@@ -46,7 +48,11 @@ export async function claim(db: Database, now = new Date()) {
 
 export type Job = NonNullable<Awaited<ReturnType<typeof claim>>>;
 
-export async function processJob(db: Database, job: Job) {
+export async function processJob(
+  db: Database,
+  job: Job,
+  store = new SourceMapStore(),
+) {
   // CPU work happens after the claim transaction has committed.
   const projectId = job.projectId;
 
@@ -55,7 +61,18 @@ export async function processJob(db: Database, job: Job) {
   }
 
   const event = safeEventSchema.parse(job.payload);
-  const hash = fingerprint(event);
+  const heartbeat = setInterval(() => {
+    void db.eventInbox
+      .updateMany({
+        where: { id: job.id, leaseToken: job.leaseToken, status: "processing" },
+        data: { leaseUntil: new Date(Date.now() + 60_000) },
+      })
+      .catch(() => {});
+  }, 20_000);
+  const resolved = await resolveFrames(db, projectId, event, store).finally(
+    () => clearInterval(heartbeat),
+  );
+  const hash = fingerprint(resolved.event);
 
   await db.$transaction(
     async (tx) => {
@@ -107,6 +124,14 @@ export async function processJob(db: Database, job: Job) {
             release: event.release,
             dist: event.dist,
             route: event.route,
+            apiCode: event.api?.code,
+            apiReason: event.api?.reason,
+            httpStatus: event.api?.status_code,
+            browserName: event.browser?.name,
+            browserMajor: event.browser?.major,
+            originalFrames: resolved.originalFrames as Prisma.InputJsonValue,
+            symbolicationState: resolved.state,
+            symbolicationVersion: resolved.version,
             frames: event.frames as Prisma.InputJsonValue,
             tags: event.tags,
             breadcrumbs: event.breadcrumbs as Prisma.InputJsonValue,
@@ -114,10 +139,15 @@ export async function processJob(db: Database, job: Job) {
         });
 
         if (event.release) {
-          await tx.release.upsert({
+          const release = await tx.release.upsert({
             where: { projectId_name: { projectId, name: event.release } },
             create: { projectId, name: event.release },
             update: {},
+          });
+
+          await tx.releaseDeployment.createMany({
+            data: [{ releaseId: release.id, environment: event.environment }],
+            skipDuplicates: true,
           });
         }
       }

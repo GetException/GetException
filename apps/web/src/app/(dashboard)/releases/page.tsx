@@ -1,40 +1,40 @@
+import Link from "next/link";
 import { projectScope } from "../../../server/access";
 import { PAGE_SIZE } from "../../../lib/pagination";
-import Link from "next/link";
 import { getRuntime } from "../../../server/runtime";
 import { dashboardUser } from "../../../server/dashboard";
+import { releaseFilters, releaseWhere } from "../../../server/releases/filters";
 import { Empty } from "../../../components/dashboard/Empty";
 import { Heading } from "../../../components/dashboard/Heading";
 import { Pagination } from "../../../components/dashboard/Pagination";
 import { ProjectSelect } from "../../../components/dashboard/ProjectSelect";
+import { ReleaseContext } from "../../../components/releases/ReleaseContext";
+import {
+  ENVIRONMENT_LABELS,
+  sourceMapStatus,
+  reviewLabel,
+  releaseReviews,
+} from "../../../components/releases/presentation";
 import { dateTime, number, releaseLabel } from "../../../lib/format";
-import { pageNumber, textParam, type Search } from "../../../lib/search-params";
+import { linkTo, type Search } from "../../../lib/search-params";
 
 export default async function ReleasesPage({
   searchParams,
 }: {
   searchParams: Promise<Search>;
 }) {
-  const search = await searchParams;
-  const q = textParam(search.q);
-  const project = textParam(search.project, 64);
-  const page = pageNumber(search.page);
+  const filters = releaseFilters(await searchParams);
+  const { project, q, environment, review, page } = filters;
   const { member } = await dashboardUser();
   const { db } = getRuntime();
-  const where = {
-    project: {
-      ...projectScope(member),
-      ...(project ? { id: project } : {}),
-    },
-    ...(q ? { name: { contains: q, mode: "insensitive" as const } } : {}),
-  };
+  const where = releaseWhere(member, filters);
   const [releases, total, projects] = await Promise.all([
     db.release.findMany({
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: (page - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
-      include: { project: { select: { name: true } } },
+      include: { project: { select: { name: true } }, deployments: true },
     }),
     db.release.count({ where }),
     db.project.findMany({
@@ -52,108 +52,200 @@ export default async function ReleasesPage({
             projectId: release.projectId,
             release: release.name,
           })),
+          ...(environment !== "all" ? { environment } : {}),
         },
         _count: { _all: true },
         _max: { receivedAt: true },
       })
     : [];
+  const groups = new Map<string, typeof releases>();
+
+  for (const release of releases) {
+    const reviews = releaseReviews(release.deployments);
+    const key =
+      environment === "staging" && !review && reviews.length === 1
+        ? `${release.projectId}/${reviews[0]}`
+        : "";
+    const group = groups.get(key) ?? [];
+
+    group.push(release);
+    groups.set(key, group);
+  }
 
   return (
     <div className="page">
       <Heading
-        title="Releases"
-        description="Follow application versions and the errors associated with each one."
+        title={review ? `${reviewLabel(review)} · Builds` : "Releases"}
+        description="Each version identifies a build. Filter by environment or open a merge request to compare its builds."
       />
       <section className="panel">
+        <nav className="status-tabs" aria-label="Release environments">
+          {[
+            ["all", "All environments"],
+            ...Object.entries(ENVIRONMENT_LABELS),
+          ].map(([value, label]) => (
+            <Link
+              key={value}
+              href={linkTo("/releases", {
+                project,
+                q,
+                environment: value,
+                ...(value === "staging" ? { review } : {}),
+              })}
+              aria-current={environment === value ? "page" : undefined}
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
         <form className="filters" method="get">
+          <input type="hidden" name="environment" value={environment} />
+          {review && <input type="hidden" name="review" value={review} />}
           <label className="filter-field search-field">
             Search releases
             <input
               name="q"
               defaultValue={q}
-              placeholder="Search by release name or commit…"
+              placeholder="Release name or commit SHA…"
               maxLength={160}
             />
           </label>
           <ProjectSelect projects={projects} selected={project} />
           <button className="button">Apply filters</button>
+          {review && (
+            <Link
+              className="text-link"
+              href={linkTo("/releases", { project, environment, q })}
+            >
+              All merge requests
+            </Link>
+          )}
         </form>
         {releases.length ? (
           <div className="table-scroll">
-            <table>
+            <table className="releases-table">
               <thead>
                 <tr>
-                  <th>Release</th>
-                  <th>Project</th>
-                  <th>First received</th>
+                  <th>Version / project</th>
+                  <th>Environment</th>
+                  <th>Merge request</th>
                   <th>Latest event</th>
-                  <th className="numeric">Retained events</th>
+                  <th className="numeric">Events</th>
                   <th>Source maps</th>
                 </tr>
               </thead>
-              <tbody>
-                {releases.map((release) => {
-                  const count = counts.find(
-                    (value) =>
-                      value.projectId === release.projectId &&
-                      value.release === release.name,
-                  );
-
-                  return (
-                    <tr key={release.id}>
-                      <td>
+              {[...groups].map(([group, items]) => (
+                <tbody key={group || "releases"}>
+                  {group && (
+                    <tr className="release-group">
+                      <th colSpan={6} scope="rowgroup">
                         <Link
-                          className="release-title"
-                          href={`/releases/${release.id}`}
+                          href={linkTo("/releases", {
+                            project: items[0]!.projectId,
+                            environment,
+                            review: releaseReviews(items[0]!.deployments)[0],
+                          })}
                         >
-                          <span className="release-mark">◇</span>
-                          <span>
-                            <strong className="mono">
-                              {releaseLabel(release.name)}
-                            </strong>
-                            <small className="muted mono" title={release.name}>
-                              {release.name}
-                            </small>
-                          </span>
+                          {reviewLabel(
+                            releaseReviews(items[0]!.deployments)[0]!,
+                          )}{" "}
+                          · {items[0]!.project.name}
+                          <span>View all builds ↗</span>
                         </Link>
-                      </td>
-                      <td>
-                        <Link
-                          className="text-link"
-                          href={`/projects/${release.projectId}`}
-                        >
-                          {release.project.name}
-                        </Link>
-                      </td>
-                      <td className="muted date-cell">
-                        {dateTime(release.createdAt)}
-                      </td>
-                      <td className="muted date-cell">
-                        {count?._max.receivedAt
-                          ? dateTime(count._max.receivedAt)
-                          : "—"}
-                      </td>
-                      <td className="numeric">
-                        {number(count?._count._all ?? 0)}
-                      </td>
-                      <td>
-                        <span className="pill">Unavailable</span>
-                      </td>
+                      </th>
                     </tr>
-                  );
-                })}
-              </tbody>
+                  )}
+                  {items.map((release) => {
+                    const count = counts.find(
+                      (value) =>
+                        value.projectId === release.projectId &&
+                        value.release === release.name,
+                    );
+                    const maps = sourceMapStatus(release.sourceMapsState);
+
+                    return (
+                      <tr key={release.id}>
+                        <td>
+                          <Link
+                            className="release-title"
+                            href={linkTo(`/releases/${release.id}`, {
+                              environment,
+                            })}
+                          >
+                            <span className="release-mark" aria-hidden="true">
+                              ◇
+                            </span>
+                            <span>
+                              <strong className="mono" title={release.name}>
+                                {releaseLabel(release.name)}
+                              </strong>
+                              <small className="muted">
+                                {release.project.name}
+                              </small>
+                            </span>
+                          </Link>
+                        </td>
+                        <td>
+                          <ReleaseContext
+                            projectId={release.projectId}
+                            deployments={release.deployments}
+                            showReviews={false}
+                          />
+                        </td>
+                        <td>
+                          <div className="release-context">
+                            {releaseReviews(release.deployments).length ? (
+                              releaseReviews(release.deployments).map((key) => (
+                                <Link
+                                  className="review-badge"
+                                  key={key}
+                                  href={linkTo("/releases", {
+                                    project: release.projectId,
+                                    environment: "staging",
+                                    review: key,
+                                  })}
+                                >
+                                  {reviewLabel(key)} ↗
+                                </Link>
+                              ))
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="date-cell">
+                          {count?._max.receivedAt ? (
+                            dateTime(count._max.receivedAt)
+                          ) : (
+                            <span className="muted">No retained events</span>
+                          )}
+                        </td>
+                        <td className="numeric">
+                          {number(count?._count._all ?? 0)}
+                        </td>
+                        <td>
+                          <span
+                            className={`pill map-state map-${maps.tone}`}
+                            title={maps.caption}
+                          >
+                            {maps.label}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              ))}
             </table>
           </div>
         ) : (
           <Empty title="No releases found">
-            Pass a release in SDK initialization to associate events with an
-            application version.
+            Try another environment or clear the filters.
           </Empty>
         )}
         <Pagination
           path="/releases"
-          values={{ project, q }}
+          values={{ project, q, environment, review }}
           page={page}
           total={total}
         />

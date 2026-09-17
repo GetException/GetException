@@ -6,6 +6,7 @@ export function registryConsumerConfig(version: string) {
     npmPreapprovedPackages: [
       `@getexception/browser@${version}`,
       `@getexception/react@${version}`,
+      `@getexception/cli@${version}`,
     ],
   };
 }

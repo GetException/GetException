@@ -13,10 +13,10 @@ React заявлен как peer dependency `^18.0.0 || ^19.0.0`. Docker-тес�
 | API                                  | Поддержка и отличие                                                                                                                                                                        |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `init(options)`                      | Только `dsn`, `release`, `dist`, `environment`, `enabled`. HTTPS обязателен; неверный DSN отключает отправку без исключения в SPA. Повторный `init` при активном клиенте ничего не меняет. |
-| `captureException(error)`            | Официальный разбор Error и stack; возвращает event ID или пустую строку, если SDK не активен/не смог принять вызов. Hint/attachments не поддерживаются.                                    |
+| `captureException(error, context?)`  | Официальный разбор Error и stack; возвращает event ID или пустую строку, если SDK не активен/не смог принять вызов. Hint/attachments не поддерживаются.                                    |
 | `captureMessage(message, level)`     | Только `error` и `fatal`, по умолчанию `error`. Другие уровни запрещены типами и дают пустой ID без отправки при вызове из JS.                                                             |
 | `setTag`, `setTags`                  | `feature`, `component`, `operation`, до 120 символов, очистка значений. Остальные ключи удаляются. Owner UI настройки allow-list ещё нет.                                                  |
-| `setContext(name, value)`            | Только `app: { route }`. URL превращается в очищенный path без origin, query и fragment.                                                                                                   |
+| `setContext(name, value)`            | `app: { route }` и ограниченный `api: { code, reason, status_code }`. URL превращается в очищенный path без origin, query и fragment.                                                      |
 | `addBreadcrumb`                      | Только `navigation`, `http`, `manual`; безопасные `path`, `method`, `status_code`, `duration`, `operation`. Максимум 50. Console, DOM и произвольные data не собираются.                   |
 | `withScope(callback)`                | Синхронный scoped callback с перечисленными setters. Callback вызывается и до init; его собственные исключения сохраняют обычное поведение приложения. Async isolation scope не обещается. |
 | `flush(timeout)`, `close(timeout)`   | `Promise<boolean>`, по умолчанию 1500 мс, максимум 2000 мс. Close завершает отправку и прерывает оставшиеся запросы.                                                                       |
@@ -38,7 +38,7 @@ GetException.setContext("app", { route: "/checkout" });
 GetException.captureException(new Error("Checkout failed"));
 ```
 
-`release` принимает `<project-slug>@<40-символьный git SHA>`. Release хранит `sourceMapsState=missing`, frame может сохранить `debug_id`. Это граница будущей загрузки source maps; сервер сейчас не загружает URL и не символицирует stack.
+`release` принимает `<project-slug>@<40-символьный git SHA>`. Source maps загружаются из CI через `@getexception/cli`, worker восстанавливает stack по приватным картам. SDK передаёт Debug ID подготовленного JS. Поддерживаются `captureException(error, {contexts: {api}})`, `setContext("api", ...)`, семейство и major-версия браузера; см. [контракт и инструкции](event-diagnostics.md). Сервер не скачивает URL из событий или карт.
 
 ## Миграция через npm alias
 

@@ -819,6 +819,17 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@getexception/cli@workspace:packages/cli":
+  version: 0.0.0-use.local
+  resolution: "@getexception/cli@workspace:packages/cli"
+  dependencies:
+    "@getexception/protocol": "workspace:*"
+    zod: "npm:4.5.4"
+  bin:
+    getexception: ./dist/index.js
+  languageName: unknown
+  linkType: soft
+
 "@getexception/config@workspace:*, @getexception/config@workspace:packages/config":
   version: 0.0.0-use.local
   resolution: "@getexception/config@workspace:packages/config"
@@ -950,6 +961,14 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@getexception/source-maps@workspace:*, @getexception/source-maps@workspace:packages/source-maps":
+  version: 0.0.0-use.local
+  resolution: "@getexception/source-maps@workspace:packages/source-maps"
+  dependencies:
+    "@getexception/protocol": "workspace:*"
+  languageName: unknown
+  linkType: soft
+
 "@getexception/web@workspace:apps/web":
   version: 0.0.0-use.local
   resolution: "@getexception/web@workspace:apps/web"
@@ -962,6 +981,7 @@ __metadata:
     "@getexception/db": "workspace:*"
     "@getexception/mail": "workspace:*"
     "@getexception/protocol": "workspace:*"
+    "@getexception/source-maps": "workspace:*"
     "@tailwindcss/postcss": "npm:4.3.3"
     "@types/react": "npm:19.2.18"
     "@types/react-dom": "npm:19.2.7"
@@ -987,6 +1007,8 @@ __metadata:
     "@getexception/db": "workspace:*"
     "@getexception/mail": "workspace:*"
     "@getexception/protocol": "workspace:*"
+    "@getexception/source-maps": "workspace:*"
+    "@jridgewell/trace-mapping": "npm:0.3.31"
     nodemailer: "npm:9.1.1"
   languageName: unknown
   linkType: soft

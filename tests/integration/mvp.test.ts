@@ -709,8 +709,15 @@ describe("durable inbox and separate SQL roles", () => {
     await upgrade.connect();
 
     try {
-      const [initial, boundaries, workflow, invitations, projectLifecycle] =
-        migrationFiles();
+      const [
+        initial,
+        boundaries,
+        workflow,
+        invitations,
+        projectLifecycle,
+        diagnostics,
+        releaseContext,
+      ] = migrationFiles();
 
       await upgrade.query(initial!);
       await upgrade.query(
@@ -770,6 +777,63 @@ describe("durable inbox and separate SQL roles", () => {
         (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
           ?.version,
       ).toBe(4);
+      await upgrade.query(diagnostics!);
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rowCount,
+      ).toBe(0);
+      await upgrade.query(
+        "INSERT INTO _prisma_migrations(finished_at) VALUES (now())",
+      );
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
+          ?.version,
+      ).toBe(5);
+      await upgrade.query(
+        `INSERT INTO release(id, "projectId", name) VALUES ('upgrade-release', 'upgrade-project', 'existing@${"a".repeat(40)}')`,
+      );
+      await upgrade.query(
+        `INSERT INTO issue(id, "projectId", fingerprint, title, "exceptionType", "firstSeen", "lastSeen") VALUES ('upgrade-issue', 'upgrade-project', 'upgrade', 'Existing error', 'Error', now(), now())`,
+      );
+      await upgrade.query(
+        `INSERT INTO error_event(id, "projectId", "eventId", "issueId", "receivedAt", timestamp, level, message, "exceptionType", handled, environment, release, frames, tags, breadcrumbs) VALUES ('upgrade-event', 'upgrade-project', '${"a".repeat(32)}', 'upgrade-issue', now(), now(), 'error', 'Existing error', 'Error', false, 'staging', 'existing@${"a".repeat(40)}', '[]', '{}', '[]')`,
+      );
+      await upgrade.query(
+        `INSERT INTO source_map_upload(id, "projectId", release, "manifestHash", "updatedAt") VALUES ('upgrade-upload', 'upgrade-project', 'existing@${"a".repeat(40)}', '${"a".repeat(64)}', now())`,
+      );
+      await upgrade.query(
+        `INSERT INTO source_artifact(id, "projectId", "uploadId", release, path, "debugId", sha256, size) VALUES ('${"a".repeat(8)}-aaaa-4aaa-aaaa-aaaaaaaaaaaa', 'upgrade-project', 'upgrade-upload', 'existing@${"a".repeat(40)}', 'app.js', 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', '${"a".repeat(64)}', 100)`,
+      );
+      await upgrade.query(releaseContext!);
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rowCount,
+      ).toBe(0);
+      await upgrade.query(
+        "INSERT INTO _prisma_migrations(finished_at) VALUES (now())",
+      );
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
+          ?.version,
+      ).toBe(6);
+      expect(
+        (
+          await upgrade.query(
+            'SELECT environment, "reviewKey", "registeredAt" FROM release_deployment',
+          )
+        ).rows,
+      ).toEqual([
+        { environment: "staging", reviewKey: "", registeredAt: null },
+      ]);
+      expect(
+        (
+          await upgrade.query(
+            'SELECT id = "storageId" AS preserved FROM source_artifact',
+          )
+        ).rows,
+      ).toEqual([{ preserved: true }]);
+      expect(
+        (await upgrade.query("SELECT count(*) FROM source_map_token")).rows[0]
+          ?.count,
+      ).toBe("0");
       expect(
         (await upgrade.query('SELECT name, enabled, "deletedAt" FROM project'))
           .rows,

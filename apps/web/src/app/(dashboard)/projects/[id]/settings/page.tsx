@@ -5,6 +5,7 @@ import { projectScope } from "../../../../../server/access";
 import { getRuntime } from "../../../../../server/runtime";
 import { EditProjectForm } from "../../../../../components/projects/EditProjectForm";
 import { DeleteProjectForm } from "../../../../../components/projects/DeleteProjectForm";
+import { SourceMapTokens } from "../../../../../components/projects/SourceMapTokens";
 
 export default async function ProjectSettingsPage({
   params,
@@ -15,7 +16,17 @@ export default async function ProjectSettingsPage({
   const { id } = await params;
   const project = await getRuntime().db.project.findFirst({
     where: { id, ...projectScope(member) },
-    include: { origins: { orderBy: { origin: "asc" } } },
+    include: {
+      origins: { orderBy: { origin: "asc" } },
+      sourceMapTokens: {
+        select: { id: true, name: true, expiresAt: true, revokedAt: true },
+        orderBy: [
+          { revokedAt: { sort: "asc", nulls: "first" } },
+          { expiresAt: "desc" },
+        ],
+        take: 30,
+      },
+    },
   });
 
   if (!project) {
@@ -47,6 +58,14 @@ export default async function ProjectSettingsPage({
           }}
         />
       </section>
+      <SourceMapTokens
+        projectId={id}
+        tokens={project.sourceMapTokens.map((token) => ({
+          ...token,
+          expiresAt: token.expiresAt.toISOString(),
+          revokedAt: token.revokedAt?.toISOString() ?? null,
+        }))}
+      />
       <section className="panel form-panel danger-panel">
         <h2>Delete project</h2>
         <DeleteProjectForm id={id} slug={project.slug} />

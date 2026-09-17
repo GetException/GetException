@@ -77,6 +77,7 @@ export async function startLocalStack(directory: string, state: LocalState) {
     const base = { BIND_HOST: "127.0.0.1" };
     const web = launch(process.execPath, ["apps/web/dist/start.js"], {
       ...base,
+      SOURCE_MAP_DIR: join(directory, "source-maps"),
       ...localWebConfig(state),
       PORT: String(state.ports.web),
     });
@@ -89,12 +90,14 @@ export async function startLocalStack(directory: string, state: LocalState) {
     });
     const worker = launch(process.execPath, ["apps/worker/dist/main.js"], {
       ...base,
+      SOURCE_MAP_DIR: join(directory, "source-maps"),
       DATABASE_URL: databaseUrl(state, "worker"),
       WORKER_CONCURRENCY: "2",
       PORT: String(state.ports.worker),
     });
     const retention = launch(process.execPath, ["apps/worker/dist/main.js"], {
       ...base,
+      SOURCE_MAP_DIR: join(directory, "source-maps"),
       DATABASE_URL: databaseUrl(state, "worker"),
       WORKER_MODE: "worker-retention",
       PORT: String(state.ports.retention),

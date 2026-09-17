@@ -43,6 +43,8 @@ export class AuthService {
       | "issue_resolve"
       | "issue_reopen"
       | "team_create"
+      | "source_map_token_create"
+      | "source_map_token_revoke"
       | "team_update"
       | "member_update"
       | "invitation_create"

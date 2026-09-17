@@ -2,6 +2,18 @@ import { build } from "tsup";
 import { spawnSync } from "node:child_process";
 
 await build({
+  entry: ["packages/cli/src/index.ts"],
+  outDir: "packages/cli/dist",
+  format: ["esm"],
+  platform: "node",
+  target: "node20",
+  dts: true,
+  clean: true,
+  sourcemap: false,
+  noExternal: ["@getexception/protocol", "zod"],
+});
+
+await build({
   entry: ["packages/browser/src/index.ts"],
   outDir: "packages/browser/dist",
   format: ["esm"],
@@ -30,6 +42,7 @@ for (const app of ["ingest", "worker", "migrate"]) {
         ? {
             main: "apps/worker/src/main.ts",
             mail: "apps/worker/src/mail/main.ts",
+            symbolication: "apps/worker/src/source-maps/symbolication.ts",
           }
         : [`apps/${app}/src/main.ts`],
     outDir: `apps/${app}/dist`,

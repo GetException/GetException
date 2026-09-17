@@ -152,3 +152,7 @@ runtime/
 
 packages/db/generated-ingest/
 __pycache__/
+
+# Private source artifacts and native development storage
+.local/
+.getexception-maps/

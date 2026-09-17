@@ -1,16 +1,26 @@
 import * as Sentry from "@getexception/sentry-browser";
 import { version } from "../package.json";
+import { browserContext } from "./browser-context";
+import { scriptDebugId } from "./debug-ids";
 import {
   encodeEnvelope,
   sanitizeBreadcrumb,
   sanitizeEvent,
   sanitizeTags,
   safePath,
+  sanitizeApiContext,
+  type ApiContext,
   toSentryEvent,
   type SafeBreadcrumb,
 } from "@getexception/protocol";
 
 export type SeverityLevel = "error" | "fatal";
+
+export type { ApiContext, BrowserContext } from "@getexception/protocol";
+
+export interface CaptureContext {
+  contexts?: { api?: ApiContext };
+}
 
 export interface BrowserOptions {
   dsn: string;
@@ -65,6 +75,10 @@ export function init(options?: BrowserOptions): void {
     }
 
     const endpoint = dsnEndpoint(options.dsn);
+    const browser =
+      typeof navigator === "undefined"
+        ? undefined
+        : browserContext(navigator.userAgent);
     // Sentry's internal DSN validator accepts numeric project IDs only. The
     // custom transport below always targets the original GetException UUID.
     const internalDsn = new URL(options.dsn);
@@ -86,9 +100,28 @@ export function init(options?: BrowserOptions): void {
         (sanitizeBreadcrumb(breadcrumb) as SafeBreadcrumb | null) ?? null,
       beforeSend: (event) => {
         try {
+          for (const exception of event.exception?.values ?? []) {
+            for (const frame of exception.stacktrace?.frames ?? []) {
+              const debugId = scriptDebugId(frame.filename);
+
+              if (debugId) {
+                frame.debug_id = debugId;
+              }
+            }
+          }
+
           return {
             ...toSentryEvent(
-              sanitizeEvent(event, event.event_id ?? ""),
+              sanitizeEvent(
+                {
+                  ...event,
+                  contexts: {
+                    ...event.contexts,
+                    ...(browser ? { browser } : {}),
+                  },
+                },
+                event.event_id ?? "",
+              ),
               version,
             ),
             type: undefined,
@@ -185,8 +218,17 @@ function guarded<T>(fn: () => T, fallback: T): T {
   }
 }
 
-export function captureException(exception: unknown): string {
-  return guarded(() => Sentry.captureException(exception), "");
+export function captureException(
+  exception: unknown,
+  context?: CaptureContext,
+): string {
+  return guarded(() => {
+    const api = sanitizeApiContext(context?.contexts?.api);
+
+    return api
+      ? Sentry.captureException(exception, { contexts: { api } })
+      : Sentry.captureException(exception);
+  }, "");
 }
 
 /** Unsupported levels explicitly produce no event and return an empty ID. */
@@ -211,11 +253,17 @@ export function setContext(
   name: string,
   context: Record<string, unknown> | null,
 ): void {
-  if (name !== "app") {
+  if (name !== "app" && name !== "api") {
     return;
   }
 
   guarded(() => {
+    if (name === "api") {
+      Sentry.setContext("api", sanitizeApiContext(context) ?? null);
+
+      return;
+    }
+
     const route = safePath(context?.route);
 
     Sentry.setContext("app", route ? { route } : null);
@@ -233,14 +281,39 @@ export function addBreadcrumb(breadcrumb: Breadcrumb): void {
 }
 
 export function withScope<T>(callback: (scope: Scope) => T): T {
-  const invoke = () => callback({ setTag, setTags, setContext, addBreadcrumb });
-
   // Application callbacks always run; their exceptions retain normal application semantics.
   if (!active) {
-    return invoke();
+    return callback({ setTag, setTags, setContext, addBreadcrumb });
   }
 
-  return Sentry.withScope(invoke);
+  return Sentry.withScope((scope) =>
+    callback({
+      setTag: (key, value) => {
+        scope.setTags(sanitizeTags({ [key]: value }));
+      },
+      setTags: (tags) => {
+        scope.setTags(sanitizeTags(tags));
+      },
+      setContext: (name, context) => {
+        if (name === "api") {
+          scope.setContext(name, sanitizeApiContext(context) ?? null);
+        }
+
+        if (name === "app") {
+          const route = safePath(context?.route);
+
+          scope.setContext(name, route ? { route } : null);
+        }
+      },
+      addBreadcrumb: (breadcrumb) => {
+        const safe = sanitizeBreadcrumb(breadcrumb);
+
+        if (safe) {
+          scope.addBreadcrumb(safe);
+        }
+      },
+    }),
+  );
 }
 
 async function waitPending(timeout: number): Promise<boolean> {

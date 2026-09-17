@@ -1,0 +1,13 @@
+{
+  "name": "@getexception/source-maps",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@getexception/protocol": "workspace:*"
+  },
+  "license": "Elastic-2.0"
+}

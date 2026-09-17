@@ -55,16 +55,28 @@ await GetException.flush(1500);
 
 `captureException` and `captureMessage` return an event ID, or an empty string when inactive. An event ID does not confirm delivery. `captureMessage` supports only `error` and `fatal`. `flush` waits for local work to finish; it does not guarantee acceptance or processing by the server. `close` shuts down the client. Both return `Promise<boolean>` and cap waiting at two seconds.
 
-Tags are limited to `feature`, `component` and `operation`. Context is limited to `app.route`, with query strings and fragments removed. Manual breadcrumbs support `navigation`, `http` and `manual` with allowed fields only. See the [compatibility guide](https://github.com/GetException/GetException/blob/stable/docs/sdk-compatibility.md) before replacing Sentry imports through npm aliases.
+Tags are limited to `feature`, `component` and `operation`. Context supports `app.route` (query strings and fragments removed) and bounded `api.code`, `api.reason`, `api.status_code`. Manual breadcrumbs support `navigation`, `http` and `manual` with allowed fields only. See the [compatibility guide](https://github.com/GetException/GetException/blob/stable/docs/sdk-compatibility.md) before replacing Sentry imports through npm aliases.
 
 ## Privacy and scope
 
 The client uses a restricted Sentry integration and cleans event data before sending. The server independently validates and cleans it again. Requests omit cookies and referrers. Network failures do not throw into your application; the client limits pending requests and backs off after HTTP 429.
 
-No replay, tracing, user identity, automatic console/DOM breadcrumbs, cookies, form data, local storage, attachments or arbitrary context are collected. Avoid putting credentials or personal data in error messages. Source map upload and symbolication are not yet implemented.
+No replay, tracing, user identity, automatic console/DOM breadcrumbs, cookies, form data, local storage, attachments or arbitrary context are collected. Avoid putting credentials or personal data in error messages. Browser family and major version are collected automatically; the full User-Agent is never sent in the payload. Private source map upload is available through `@getexception/cli`; match the SDK release to the exact build SHA.
 
 This package targets modern browsers, is ESM and includes TypeScript declarations. It is not a Node.js SDK.
 
 ## License
 
 MIT. See `THIRD-PARTY-NOTICES.md` for the underlying Sentry SDK and bundled dependencies.
+
+## API diagnostics
+
+```ts
+GetException.captureException(error, {
+  contexts: {
+    api: { code: "error.request", reason: "timeout", status_code: 504 },
+  },
+});
+```
+
+Only documented technical codes are allowed (64 ASCII letters/digits/`_.-`, starting with a letter, or 1–6 digits). Reasons: `network_error`, `timeout`, `aborted`, `unauthorized`, `forbidden`, `not_found`, `validation_error`, `conflict`, `rate_limited`, `server_error`. HTTP status is an integer from 100 to 599. Unknown fields/reasons are dropped; do not pass arbitrary response text. These fields also work with `scope.setContext("api", ...)`.

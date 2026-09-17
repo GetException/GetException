@@ -4,6 +4,9 @@ import { createDatabase, assertSchema } from "@getexception/db";
 import { workerConcurrency, logCode } from "@getexception/config";
 import { queueMetrics, retainBatch, runOne } from "./events";
 import { purgeDeletedProjectBatch } from "./project-retention";
+import { validateOneUpload } from "./source-maps/uploads";
+import { reprocessOneEvent } from "./source-maps/reprocess";
+import { retainSourceMaps } from "./source-maps/retention";
 
 async function main() {
   const mode = process.env.WORKER_MODE ?? "worker-events";
@@ -64,6 +67,7 @@ async function main() {
       try {
         if (mode === "worker-retention") {
           await purgeDeletedProjectBatch(db);
+          await retainSourceMaps(db);
         }
 
         const worked =
@@ -83,9 +87,29 @@ async function main() {
     }
   }
 
-  await Promise.all(
-    Array.from({ length: mode === "worker-events" ? concurrency : 1 }, loop),
-  );
+  async function sourceMapLoop() {
+    while (!stopping) {
+      try {
+        const worked =
+          (await validateOneUpload(db)) || (await reprocessOneEvent(db));
+
+        if (worked) {
+          continue;
+        }
+      } catch {
+        logCode("worker", "unavailable");
+      }
+
+      await setTimeout(1000, undefined, { signal: controller.signal }).catch(
+        () => {},
+      );
+    }
+  }
+
+  await Promise.all([
+    ...Array.from({ length: mode === "worker-events" ? concurrency : 1 }, loop),
+    ...(mode === "worker-events" ? [sourceMapLoop()] : []),
+  ]);
   await db.$disconnect();
   logCode("worker", "stopped");
 }

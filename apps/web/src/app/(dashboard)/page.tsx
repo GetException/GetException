@@ -27,15 +27,24 @@ export default async function Overview() {
           enabled: true,
           _count: {
             select: {
-              issues: { where: { status: "open" } },
+              issues: { where: { status: "open", eventCount: { gt: 0 } } },
               events: { where: { receivedAt: { gte: since } } },
             },
           },
         },
       }),
       db.project.count({ where: project }),
-      db.issue.count({ where: { project, status: "open" } }),
-      db.issue.count({ where: { project, status: "open", regression: true } }),
+      db.issue.count({
+        where: { project, eventCount: { gt: 0 }, status: "open" },
+      }),
+      db.issue.count({
+        where: {
+          project,
+          eventCount: { gt: 0 },
+          status: "open",
+          regression: true,
+        },
+      }),
       db.errorEvent.count({ where: { project, receivedAt: { gte: since } } }),
       db.errorEvent.findMany({
         where: { project, receivedAt: { gte: since } },

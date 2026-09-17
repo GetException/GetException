@@ -33,6 +33,7 @@ export function issueWhere(
   now = Date.now(),
 ): Prisma.IssueWhereInput {
   return {
+    eventCount: { gt: 0 },
     project: {
       ...projectScope(member),
       ...(filters.project ? { id: filters.project } : {}),

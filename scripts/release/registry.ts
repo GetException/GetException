@@ -6,7 +6,7 @@ import { setTimeout } from "node:timers/promises";
 import { stringify } from "yaml";
 import { registryConsumerConfig } from "./consumer-config";
 
-const names = ["browser", "react"] as const;
+const names = ["browser", "react", "cli"] as const;
 const root = resolve(".artifacts/registry");
 const publish = process.argv.includes("--publish");
 const version = JSON.parse(
@@ -137,6 +137,7 @@ if (!publish) {
       dependencies: {
         "@getexception/browser": `file:./browser.tgz`,
         "@getexception/react": `file:./react.tgz`,
+        "@getexception/cli": `file:./cli.tgz`,
         "@sentry/browser": `npm:@getexception/browser@${version}`,
         "@sentry/react": `npm:@getexception/react@${version}`,
         react: "18.3.1",
@@ -157,7 +158,9 @@ if (!publish) {
   );
   yarn(["node", "aliases.mjs"], root);
 
-  for (const name of names) {
+  yarn(["exec", "getexception", "--help"], root);
+
+  for (const name of ["browser", "react"]) {
     cpSync(`fixtures/${name}-spa`, resolve(root, `${name}-spa`), {
       recursive: true,
       filter: (path) => !/(?:^|\/)(?:node_modules|dist)(?:\/|$)/.test(path),

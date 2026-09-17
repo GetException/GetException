@@ -603,3 +603,11 @@ Audit log защищает от обычного изменения через �
 - [PostgreSQL 17: Role Attributes](https://www.postgresql.org/docs/17/role-attributes.html)
 - [PostgreSQL 17: Row Security Policies](https://www.postgresql.org/docs/17/ddl-rowsecurity.html)
 - [PostgreSQL 17: Client Authentication](https://www.postgresql.org/docs/17/client-authentication.html)
+
+## Реализация source-map границы (2026-09-17)
+
+Upload принимает только HTTPS + project-scoped Bearer token; cookies/DSN недостаточно, Origin запрещён. Token хранится хешем, показывается Owner один раз после MFA step-up, отзывается и истекает через 90 дней. Файлы ограничены manifest quota, checksum, JSON-only transport, UUID storage paths и O_NOFOLLOW. Комплект становится ready лишь после проверки worker’ом всех файлов. Parser — ограниченный по памяти/времени worker thread без env родителя, не выполняет код и не обращается к remote sources. Родительский worker в production не имеет internet egress.
+
+Фрагменты исходников доступны только через существующую проверку прав на проект и отображаются текстом. Полные карты не скачиваются через API, ingest/Caddy/mail не имеют mount. CI upload token доступен только доверенному коду CI; публичный DSN не заменяет его. Автоматический PostgreSQL backup не включает volume карт: требуется отдельный приватный backup или retry сохранённых CI artifacts.
+
+API reason ограничен enum, API code — техническим форматом; это не разрешение на PII в code. Клиентские browser family/major считаются недоверенными диагностическими данными. Полный User-Agent, тела ответов, заголовки и произвольные contexts по-прежнему не сохраняются.

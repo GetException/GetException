@@ -12,6 +12,7 @@
     "@getexception/db": "workspace:*",
     "@getexception/mail": "workspace:*",
     "@getexception/protocol": "workspace:*",
+    "@getexception/source-maps": "workspace:*",
     "argon2": "0.44.0",
     "better-auth": "1.6.23",
     "better-call": "1.3.7",

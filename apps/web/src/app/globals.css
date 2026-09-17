@@ -1589,3 +1589,150 @@ tbody tr:hover {
 .invite-existing .form + .form {
   margin-top: 24px;
 }
+
+.source-code {
+  overflow-x: auto;
+  padding: 16px 0;
+  font-size: 13px;
+}
+.source-code-line {
+  display: flex;
+  min-width: max-content;
+  gap: 24px;
+  padding: 4px 24px;
+}
+.source-code-line > span {
+  min-width: 4ch;
+  text-align: right;
+  user-select: none;
+}
+.source-code-line > code {
+  white-space: pre;
+}
+.source-code-error {
+  background: #f9808020;
+  color: #f5acac;
+}
+.upload-token-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--border);
+  padding: 16px 0;
+}
+.upload-token-notice {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.upload-token-notice pre {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.activity-list {
+  padding: 0 24px 24px;
+  list-style: none;
+}
+.activity-list li + li {
+  margin-top: 12px;
+}
+
+.release-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.environment-badge,
+.review-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.environment-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.environment-production,
+.map-ready {
+  color: #8edcb3;
+  background: #173b2b40;
+  border-color: #43806480;
+}
+.environment-staging {
+  color: #eac178;
+  background: #44341640;
+  border-color: #99794780;
+}
+.environment-development {
+  color: #a7caff;
+  background: #223c6040;
+  border-color: #507cad80;
+}
+.environment-unknown {
+  color: var(--muted);
+}
+.review-badge {
+  color: #c7b8ff;
+  background: #3a2b6140;
+  border-color: #7654b780;
+}
+.map-failed {
+  color: #e3a295;
+  border-color: #a6685b80;
+}
+.map-pending {
+  color: #eac178;
+}
+.release-context a:hover {
+  filter: brightness(1.15);
+  text-decoration: underline;
+}
+.releases-table {
+  min-width: 850px;
+}
+.releases-table td {
+  padding-top: 19px;
+  padding-bottom: 19px;
+}
+.releases-table .date-cell {
+  font-size: 12px;
+}
+.releases-table .release-title strong {
+  font-size: 14px;
+}
+.releases-table .release-title small {
+  font-size: 12px;
+}
+.releases-table .map-state {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.release-group th {
+  background: var(--surface-raised);
+  padding: 12px 24px;
+}
+.release-group a {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: #c7b8ff;
+}
+.release-group span {
+  font-weight: 400;
+  font-size: 12px;
+}
+.release-environment-tabs {
+  margin-bottom: 20px;
+}

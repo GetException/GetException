@@ -24,7 +24,12 @@
 	tls internal
 	@private path /metrics /health/* /api/*/envelope/*
 	respond @private 404
-	request_body {
+	@source_upload path /api/v1/projects/*/source-maps /api/v1/projects/*/source-maps/*
+	request_body @source_upload {
+		max_size 16777216
+	}
+	@dashboard_request not path /api/v1/projects/*/source-maps /api/v1/projects/*/source-maps/*
+	request_body @dashboard_request {
 		max_size 16KB
 	}
 	header {

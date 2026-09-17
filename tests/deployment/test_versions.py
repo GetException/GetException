@@ -19,7 +19,7 @@ class VersionPreparationTests(unittest.TestCase):
             manager = json.loads((ROOT / "package.json").read_text())["packageManager"]
             (root / "package.json").write_text(json.dumps({"name": "@getexception/version-test", "private": True,
                                                           "packageManager": manager, "workspaces": ["packages/*"]}))
-            for name in ["browser", "react"]:
+            for name in ["browser", "react", "cli"]:
                 path = root / "packages" / name
                 path.mkdir(parents=True)
                 (path / "package.json").write_text(json.dumps({"name": "@getexception/" + name, "version": "0.1.0"}))
@@ -36,7 +36,7 @@ class VersionPreparationTests(unittest.TestCase):
             # This is a minimal throwaway Git fixture, not a repository release commit.
             run("git", "-c", "user.name=Release Test", "-c", "user.email=release@example.test", "commit", "--quiet", "-m", "fixture")
             run("git", "checkout", "--detach", "HEAD")
-            for name in ["browser", "react"]:
+            for name in ["browser", "react", "cli"]:
                 run("corepack", "yarn", "workspace", "@getexception/" + name, "version", "0.1.1")
                 self.assertEqual(json.loads((root / "packages" / name / "package.json").read_text())["version"], "0.1.1")
             run("corepack", "yarn", "install", "--immutable", "--mode=skip-build")

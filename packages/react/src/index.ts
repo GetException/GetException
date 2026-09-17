@@ -16,6 +16,9 @@ export type {
   Breadcrumb,
   Scope,
   SeverityLevel,
+  CaptureContext,
+  ApiContext,
+  BrowserContext,
 } from "@getexception/browser";
 
 // Official React integration shares the Sentry core client configured by our browser wrapper.

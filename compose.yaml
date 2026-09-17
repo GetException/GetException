@@ -62,7 +62,9 @@ services:
     build: { context: ., dockerfile: docker/Dockerfile, target: web }
     image: getexception-web:${IMAGE_TAG:-local}
     mem_limit: 1g
+    volumes: [source-maps:/var/lib/getexception/source-maps]
     environment:
+      SOURCE_MAP_DIR: /var/lib/getexception/source-maps
       DATABASE_URL: postgresql://getexception_web:${WEB_PASSWORD}@postgres:5432/getexception
       DASHBOARD_ORIGIN: https://${DASHBOARD_HOST:-monitor.localhost}
       INGEST_ORIGIN: https://${INGEST_HOST:-ingest.monitor.localhost}
@@ -102,7 +104,9 @@ services:
     <<: *runtime
     build: { context: ., dockerfile: docker/Dockerfile, target: worker }
     image: getexception-worker:${IMAGE_TAG:-local}
+    volumes: [source-maps:/var/lib/getexception/source-maps:ro]
     environment:
+      SOURCE_MAP_DIR: /var/lib/getexception/source-maps
       DATABASE_URL: postgresql://getexception_worker:${WORKER_PASSWORD}@postgres:5432/getexception
       WORKER_MODE: worker-events
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
@@ -120,7 +124,9 @@ services:
     <<: *runtime
     build: { context: ., dockerfile: docker/Dockerfile, target: worker }
     image: getexception-worker:${IMAGE_TAG:-local}
+    volumes: [source-maps:/var/lib/getexception/source-maps]
     environment:
+      SOURCE_MAP_DIR: /var/lib/getexception/source-maps
       DATABASE_URL: postgresql://getexception_worker:${WORKER_PASSWORD}@postgres:5432/getexception
       WORKER_MODE: worker-retention
     deploy: { replicas: 1 }
@@ -202,6 +208,7 @@ networks:
   database: { internal: true }
   mail: { internal: true }
 volumes:
+  source-maps:
   postgres-data: {}
   caddy-data: {}
   caddy-config: {}

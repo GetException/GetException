@@ -2,16 +2,20 @@
 
 import { useState } from "react";
 import { Button } from "@base-ui/react/button";
-import type { SafeFrame } from "@getexception/protocol";
+import { SourceContext } from "./SourceContext";
+import type { SafeFrame, OriginalFrame } from "@getexception/protocol";
 
 export function StackTrace({
   frames,
-  release,
+  originals = [],
+  state,
 }: {
   frames: SafeFrame[];
-  release?: string | null;
+  originals?: (OriginalFrame | null)[];
+  state?: string;
 }) {
   const ordered = frames.slice().reverse();
+  const mapped = originals.slice().reverse();
   const [applicationOnly, setApplicationOnly] = useState(false);
   const [selected, setSelected] = useState(0);
   const chosen = ordered[selected];
@@ -60,13 +64,17 @@ export function StackTrace({
               >
                 <span className="frame-dot" />
                 <span className="frame-function mono">
-                  {frame.function || "<anonymous>"}
+                  {mapped[index]?.function || frame.function || "<anonymous>"}
                 </span>
-                <span className="frame-file mono" title={frame.filename}>
-                  {frame.filename}
+                <span
+                  className="frame-file mono"
+                  title={mapped[index]?.filename ?? frame.filename}
+                >
+                  {mapped[index]?.filename ?? frame.filename}
                 </span>
                 <span className="frame-line mono">
-                  {frame.lineno}:{frame.colno}
+                  {mapped[index]?.lineno ?? frame.lineno}:
+                  {mapped[index]?.colno ?? frame.colno}
                 </span>
               </button>
             ))
@@ -79,33 +87,7 @@ export function StackTrace({
           )}
         </div>
       </section>
-      <section className="panel source-panel">
-        <div className="section-heading">
-          <h2>Source context</h2>
-          <span className="pill">Source map unavailable</span>
-        </div>
-        {chosen && (
-          <div className="source-location mono">
-            <span>{chosen.filename}</span>
-            <span className="muted">
-              Line {chosen.lineno} · column {chosen.colno}
-            </span>
-          </div>
-        )}
-        <div className="source-unavailable">
-          <span className="source-icon" aria-hidden="true">
-            &lt;/&gt;
-          </span>
-          <div>
-            <strong>Original source is not available</strong>
-            <p className="muted">
-              {release
-                ? "This release has no source map available. The stack above shows the compiled application frames."
-                : "This event has no release or source map attached. You can inspect the captured stack above."}
-            </p>
-          </div>
-        </div>
-      </section>
+      <SourceContext frame={chosen} original={mapped[selected]} state={state} />
     </>
   );
 }

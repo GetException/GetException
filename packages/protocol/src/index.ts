@@ -1,5 +1,41 @@
 import { z } from "zod";
 import { BoundaryError, record } from "./json";
+import {
+  apiContextSchema,
+  browserContextSchema,
+  sanitizeApiContext,
+  sanitizeBrowserContext,
+} from "./diagnostics";
+
+export {
+  API_REASONS,
+  BROWSER_NAMES,
+  apiContextSchema,
+  browserContextSchema,
+  sanitizeApiContext,
+  sanitizeBrowserContext,
+  type ApiContext,
+  type BrowserContext,
+} from "./diagnostics";
+
+export {
+  RELEASE_ENVIRONMENTS,
+  deploymentSchema,
+  releaseRegistrationSchema,
+  type ReleaseDeploymentInput,
+} from "./releases";
+
+export {
+  SOURCE_MAP_LIMITS,
+  sourceUploadSchema,
+  sourceArtifactSchema,
+  artifactPathSchema,
+  releaseNameSchema,
+  originalFrameSchema,
+  type SourceUpload,
+  type SourceArtifactInput,
+  type OriginalFrame,
+} from "./source-maps";
 
 export {
   boundedJson,
@@ -50,6 +86,8 @@ export const safeEventSchema = z
     release: z.string().max(160).optional(),
     dist: z.string().max(64).optional(),
     route: z.string().max(512).optional(),
+    api: apiContextSchema.optional(),
+    browser: browserContextSchema.optional(),
     frames: z.array(safeFrameSchema).max(100),
     tags: z.record(z.string().max(32), z.string().max(120)),
     breadcrumbs: z.array(safeBreadcrumbSchema).max(50),
@@ -315,6 +353,17 @@ export function sanitizeEvent(
     out.route = route;
   }
 
+  const api = sanitizeApiContext(record(input.contexts).api);
+  const browser = sanitizeBrowserContext(record(input.contexts).browser);
+
+  if (api) {
+    out.api = api;
+  }
+
+  if (browser) {
+    out.browser = browser;
+  }
+
   return safeEventSchema.parse(out);
 }
 
@@ -340,7 +389,11 @@ export function toSentryEvent(event: SafeEvent, sdkVersion = "0.1.0") {
     },
     tags: event.tags,
     breadcrumbs: event.breadcrumbs,
-    contexts: event.route ? { app: { route: event.route } } : {},
+    contexts: {
+      ...(event.route ? { app: { route: event.route } } : {}),
+      ...(event.api ? { api: event.api } : {}),
+      ...(event.browser ? { browser: event.browser } : {}),
+    },
   };
 }
 

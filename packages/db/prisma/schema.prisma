@@ -255,6 +255,10 @@ model Project {
   events ErrorEvent[]
   releases Release[]
   stats ProjectDailyStat[]
+  sourceMapTokens SourceMapToken[]
+  sourceMapUploads SourceMapUpload[]
+  sourceArtifacts SourceArtifact[]
+  issueActivities IssueActivity[]
   @@unique([organizationId,slug])
   @@index([deletedAt])
   @@map("project")
@@ -335,6 +339,14 @@ model ErrorEvent {
   release String?
   dist String?
   route String?
+  apiCode String?
+  apiReason String?
+  httpStatus Int?
+  browserName String?
+  browserMajor Int?
+  originalFrames Json @default("[]")
+  symbolicationState String @default("missing")
+  symbolicationVersion Int @default(0)
   frames Json
   tags Json
   breadcrumbs Json
@@ -342,6 +354,7 @@ model ErrorEvent {
   issue Issue @relation(fields:[issueId,projectId],references:[id,projectId],onDelete:Cascade)
   @@unique([projectId,eventId])
   @@index([issueId,receivedAt])
+  @@index([projectId,release,symbolicationVersion], map: "error_event_release_symbolication_idx")
   @@index([receivedAt])
   @@map("error_event")
 }
@@ -350,11 +363,25 @@ model Release {
   projectId String
   name String
   sourceMapsState String @default("missing")
+  sourceMapsVersion Int @default(0)
+  deployments ReleaseDeployment[]
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
   @@unique([projectId,name])
   @@map("release")
 }
+model ReleaseDeployment {
+  id String @id @default(uuid())
+  releaseId String
+  environment String
+  reviewKey String @default("")
+  registeredAt DateTime? @db.Timestamptz(3)
+  release Release @relation(fields:[releaseId], references:[id], onDelete:Cascade)
+  @@unique([releaseId,environment,reviewKey])
+  @@index([environment,reviewKey])
+  @@map("release_deployment")
+}
+
 model ProjectDailyStat {
   projectId String
   day DateTime @db.Date
@@ -377,4 +404,70 @@ view IngestionConfig {
 view RuntimeSchema {
   version Int @unique
   @@map("runtime_schema")
+}
+
+model SourceMapToken {
+  id String @id @default(uuid())
+  projectId String
+  tokenHash String @unique
+  name String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  @@index([projectId])
+  @@map("source_map_token")
+}
+
+model SourceMapUpload {
+  id String @id @default(uuid())
+  projectId String
+  release String
+  manifestHash String
+  status String @default("receiving")
+  attempts Int @default(0)
+  leaseToken String?
+  leaseUntil DateTime? @db.Timestamptz(3)
+  errorCode String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  artifacts SourceArtifact[]
+  @@unique([projectId,manifestHash])
+  @@index([status,createdAt])
+  @@map("source_map_upload")
+}
+
+model SourceArtifact {
+  id String @id @default(uuid())
+  projectId String
+  uploadId String
+  release String
+  path String
+  debugId String
+  sha256 String
+  size Int
+  uploadedAt DateTime? @db.Timestamptz(3)
+  storageId String
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  upload SourceMapUpload @relation(fields:[uploadId], references:[id], onDelete:Cascade)
+  @@unique([uploadId,debugId])
+  @@index([projectId,debugId])
+  @@index([storageId])
+  @@index([projectId,release,path])
+  @@index([uploadId])
+  @@map("source_artifact")
+}
+
+model IssueActivity {
+  id String @id @default(uuid())
+  projectId String
+  fromIssueId String
+  toIssueId String
+  eventId String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  @@index([projectId,fromIssueId])
+  @@index([projectId,toIssueId])
+  @@map("issue_activity")
 }

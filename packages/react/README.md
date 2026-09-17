@@ -51,7 +51,7 @@ To check the connection, call `GetException.captureException(new Error("GetExcep
 
 `init`, `captureException`, `captureMessage`, `setTag`, `setTags`, `setContext`, `addBreadcrumb`, `withScope`, `flush`, `close`, and `ErrorBoundary`. See the [browser SDK](https://www.npmjs.com/package/@getexception/browser) for configuration and the [compatibility guide](https://github.com/GetException/GetException/blob/stable/docs/sdk-compatibility.md) for exact limits.
 
-The SDK uses a restricted Sentry integration. It sends errors only: no replay, tracing, automatic console/DOM breadcrumbs, cookies, form values or user identity. Tags and context use an allow-list. Source map upload and symbolication are not yet implemented, so production stack traces may refer to bundled code.
+The SDK uses a restricted Sentry integration. It sends errors only: no replay, tracing, automatic console/DOM breadcrumbs, cookies, form values or user identity. Tags and context use an allow-list. Browser family and major version are collected without sending the full User-Agent. API diagnostics support `captureException(error, { contexts: { api: { code, reason, status_code } } })` with a restricted allow-list; see the browser package README. Upload private source maps with `@getexception/cli` using the same release SHA as `init`.
 
 React is a peer dependency and stays under the application's control. Importing the package does not start monitoring; call `init` explicitly. The package is ESM and includes TypeScript declarations.
 

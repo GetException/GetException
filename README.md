@@ -92,6 +92,7 @@ flowchart LR
 - `apps/ingest`: отдельный Node HTTP-процесс; ограниченный parser, проверка DSN/Origin, allow-list и повторная очистка. `200` выдаётся после завершённого INSERT с `synchronous_commit=on`. Никакой группировки в запросе.
 - `apps/worker`: event/retention image и отдельный mail image. Event workers берут короткую lease через `FOR UPDATE SKIP LOCKED`, вычисляют fingerprint вне транзакции и атомарно сохраняют результат с проверкой lease. Retention удаляет события старше 30 дней партиями по 100.
 - `packages/protocol`: общий parser/санитайзер и каноническая схема события. `packages/db`: Prisma-модель и миграции. `packages/config`: проверка конфигурации. Серверные зависимости не разрешены в клиентских пакетах.
+- `packages/cli`: подготовка Debug ID и закрытая загрузка source maps из CI.
 - `packages/browser`, `packages/react`: ограниченная обёртка закреплённого официального Sentry SDK, собственный безопасный transport. Поддерживается явное подмножество API, а не весь Sentry.
 
 Подробности: [границы и безопасность](docs/architecture.md), [совместимость SDK](docs/sdk-compatibility.md), [тестирование](docs/testing.md), [зависимости](docs/dependencies.md).
@@ -100,9 +101,9 @@ flowchart LR
 
 ## Границы итерации
 
-В единственном workspace работают Owner, Developer и Viewer. Owner управляет командами, участниками и приглашениями; Developer/Viewer получают доступ через команды. Приглашения привязаны к email, подтверждаются отдельным письмом и доставляются через SMTP outbox отдельным worker-mail. MFA обязателен для Owner, доброволен для остальных; повышение до Owner требует предварительно включить MFA. Source maps, CLI, symbolication, password reset, MFA reset, offline Owner recovery, уведомления об ошибках не реализованы. Потеря всех факторов сейчас требует операторского восстановления из backup; обход через email отсутствует.
+В единственном workspace работают Owner, Developer и Viewer. Owner управляет командами, участниками и приглашениями; Developer/Viewer получают доступ через команды. Приглашения привязаны к email, подтверждаются отдельным письмом и доставляются через SMTP outbox отдельным worker-mail. MFA обязателен для Owner, доброволен для остальных; повышение до Owner требует предварительно включить MFA. Password reset, MFA reset, offline Owner recovery, уведомления об ошибках не реализованы. Потеря всех факторов сейчас требует операторского восстановления из backup; обход через email отсутствует.
 
-Stack trace пока указывает на собранные JS-файлы. Группировка базовая; Resolve/Reopen и Regression работают; удаления/восстановления проектов и ротации DSN ещё нет. Совместимость ограничена ESM, современными браузерами и проверенным React 19. Не поддерживаются performance, replay, profiling, sessions как продукт, attachments, произвольные contexts и PII.
+Stack trace восстанавливает исходные позиции и фрагменты кода при наличии подходящих приватных source maps; иначе показывает собранные JS-файлы. Работают Resolve/Reopen, Regression и удаление проектов с семью днями на восстановление. Ротация DSN пока не реализована. Совместимость ограничена ESM, современными браузерами и React 18/19. Не поддерживаются performance, replay, profiling, sessions как продукт, attachments, произвольные contexts и PII.
 
 Списки используют серверные фильтры и пагинацию: 25 строк, события группы — 20, команды — 12; доступно до 200 страниц в одном запросе фильтров; график читает не более 25 000 событий за сутки и отмечает усечение. Дневные accepted counters сохраняются, отдельная статистика rejected пока не заполняется. Подтверждения inbox без payload и агрегаты групп сохраняются после retention для идемпотентности; их compaction и лимиты общей БД требуют следующего эксплуатационного этапа.
 
@@ -114,6 +115,8 @@ Stack trace пока указывает на собранные JS-файлы. �
 
 Первую серверную установку можно запустить без SMTP: установщик выберет `MAIL_ENABLED=false`. Owner, проекты и приём ошибок работают, приглашения доступны после подключения почты. Подключение SMTP позже не требует пересоздавать Owner или базу.
 
+API-диагностика, сведения о браузере, source maps и проверка интеграции: [event-diagnostics.md](docs/event-diagnostics.md).
+
 ## Лицензии
 
-Сервер и внутренние серверные пакеты: [Elastic License 2.0](LICENSE), согласно ADR-0001. `@getexception/browser`, `@getexception/react` и встраиваемый в SDK приватный `@getexception/protocol` имеют собственные MIT LICENSE. Существующий корневой Apache-2.0 заменён на принятую в ADR серверную лицензию; зависимости сохраняют собственные лицензии и notices.
+Сервер и внутренние серверные пакеты: [Elastic License 2.0](LICENSE), согласно ADR-0001. `@getexception/browser`, `@getexception/react`, `@getexception/cli` и встраиваемый в SDK приватный `@getexception/protocol` имеют собственные MIT LICENSE. Существующий корневой Apache-2.0 заменён на принятую в ADR серверную лицензию; зависимости сохраняют собственные лицензии и notices.

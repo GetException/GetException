@@ -17,7 +17,7 @@ def package_files(path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Validate SDK contents before publication and compare published packages.")
-    parser.add_argument("name", choices=["browser", "react"])
+    parser.add_argument("name", choices=["browser", "react", "cli"])
     parser.add_argument("--archive", type=Path, help="Validate a local archive before publication")
     options = parser.parse_args()
     name = options.name

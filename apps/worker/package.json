@@ -8,6 +8,8 @@
     "@getexception/db": "workspace:*",
     "@getexception/mail": "workspace:*",
     "@getexception/protocol": "workspace:*",
+    "@getexception/source-maps": "workspace:*",
+    "@jridgewell/trace-mapping": "0.3.31",
     "nodemailer": "9.1.1"
   },
   "scripts": {

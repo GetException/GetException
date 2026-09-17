@@ -29,7 +29,7 @@ def prepared_source(commit):
     source = markers[0].split()[1]
     if run("git", "log", "-1", "--format=%P", commit) != source:
         raise RuntimeError("Release commit must be a direct child of its source")
-    paths = ["packages/" + name + "/package.json" for name in ["browser", "react"]]
+    paths = ["packages/" + name + "/package.json" for name in ["browser", "react", "cli"]]
     changed = set(run("git", "diff", "--name-only", source, commit).splitlines())
     if not set(paths) <= changed <= set(paths) | {"yarn.lock"}:
         raise RuntimeError("Unexpected files in the prepared release commit")
@@ -64,19 +64,19 @@ def prepare(source):
         run("git", "checkout", "--detach", source)
         return source
     run("git", "checkout", "--detach", source)
-    manifests = [Path("packages") / name / "package.json" for name in ["browser", "react"]]
+    manifests = [Path("packages") / name / "package.json" for name in ["browser", "react", "cli"]]
     versions = [json.loads(path.read_text())["version"] for path in manifests]
-    if versions[0] != versions[1] or not re.fullmatch(r"\d+\.\d+\.\d+", versions[0]):
+    if len(set(versions)) != 1 or not re.fullmatch(r"\d+\.\d+\.\d+", versions[0]):
         raise RuntimeError("SDK versions must be aligned stable semver versions")
     major, minor, patch = map(int, versions[0].split("."))
     version = f"{major}.{minor}.{patch + 1}"
-    for name in ["browser", "react"]:
+    for name in ["browser", "react", "cli"]:
         run("corepack", "yarn", "workspace", "@getexception/" + name, "version", version)
     run("corepack", "yarn", "install", "--no-immutable", "--mode=update-lockfile")
     run("corepack", "yarn", "format")
     # Required before EVERY commit, including the automated release commit.
     subprocess.run(["corepack", "yarn", "checks"], check=True)
-    run("git", "add", "packages/browser/package.json", "packages/react/package.json", "yarn.lock")
+    run("git", "add", "packages/browser/package.json", "packages/react/package.json", "packages/cli/package.json", "yarn.lock")
     run("git", "-c", "user.name=github-actions[bot]", "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
         "commit", "-m", "chore: release SDK " + version + " [skip ci]", "-m", marker)
     sha = run("git", "rev-parse", "HEAD")

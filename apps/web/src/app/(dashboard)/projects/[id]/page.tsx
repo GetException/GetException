@@ -27,7 +27,7 @@ export default async function ProjectPage({
       },
       _count: {
         select: {
-          issues: { where: { status: "open" } },
+          issues: { where: { status: "open", eventCount: { gt: 0 } } },
           events: true,
           releases: true,
         },

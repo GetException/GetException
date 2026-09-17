@@ -15,6 +15,7 @@ RUN yarn workspaces focus @getexception/migrate --production
 
 FROM base AS runtime-base
 ENV NODE_ENV=production
+RUN mkdir -p /var/lib/getexception/source-maps && chown node:node /var/lib/getexception/source-maps && chmod 700 /var/lib/getexception/source-maps
 # Package managers are build tools; none of the deployed processes needs them.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* /opt/corepack \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/pnpm /usr/local/bin/pnpx

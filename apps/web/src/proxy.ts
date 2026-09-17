@@ -29,5 +29,7 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // Raw, bounded CI uploads are authenticated by their route. Avoid cloning
+  // their bodies in the UI nonce proxy (whose default buffer limit is 10 MiB).
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/v1/).*)"],
 };

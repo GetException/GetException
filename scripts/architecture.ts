@@ -9,9 +9,11 @@ const allowed: Record<string, string[]> = {
   config: [],
   db: [],
   mail: [],
-  web: ["db", "config", "protocol", "mail"],
+  "source-maps": ["protocol"],
+  cli: ["protocol"],
+  web: ["db", "config", "protocol", "mail", "source-maps"],
   ingest: ["db", "config", "protocol"],
-  worker: ["db", "config", "protocol", "mail"],
+  worker: ["db", "config", "protocol", "mail", "source-maps"],
   migrate: ["db"],
   "browser-spa": ["browser"],
   "react-spa": ["react"],
@@ -46,7 +48,7 @@ export function checkArchitecture() {
       }
 
       if (
-        ["browser", "react"].includes(name)
+        ["browser", "react", "cli"].includes(name)
           ? manifest.publishConfig?.access !== "public"
           : manifest.private !== true
       ) {

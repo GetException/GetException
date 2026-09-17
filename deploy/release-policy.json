@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 4,
-  "rollbackFromSchemaVersions": [4],
+  "schemaVersion": 6,
+  "rollbackFromSchemaVersions": [6],
   "platform": "linux/amd64"
 }

@@ -4,7 +4,11 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getRuntime } from "../../../../server/runtime";
 import { dashboardUser } from "../../../../server/dashboard";
-import { safeFrameSchema, safeBreadcrumbSchema } from "@getexception/protocol";
+import {
+  safeFrameSchema,
+  safeBreadcrumbSchema,
+  originalFrameSchema,
+} from "@getexception/protocol";
 import { dateTime, number, releaseLabel } from "../../../../lib/format";
 import {
   linkTo,
@@ -17,6 +21,8 @@ import { Status } from "../../../../components/dashboard/Status";
 import { EventTabs } from "../../../../components/issues/EventTabs";
 import { IssueStatusButton } from "../../../../components/issues/IssueStatusButton";
 import { StackTrace } from "../../../../components/issues/StackTrace";
+import { IssueActivity } from "../../../../components/issues/IssueActivity";
+import { EventDiagnostics } from "../../../../components/issues/EventDiagnostics";
 
 export default async function IssuePage({
   params,
@@ -40,6 +46,14 @@ export default async function IssuePage({
     notFound();
   }
 
+  const activities = await db.issueActivity.findMany({
+    where: {
+      projectId: issue.projectId,
+      OR: [{ fromIssueId: issue.id }, { toIssueId: issue.id }],
+    },
+    orderBy: { createdAt: "desc" },
+    take: 30,
+  });
   const scope = { issueId: issue.id, projectId: issue.projectId };
   const ordering = [{ receivedAt: "desc" as const }, { id: "desc" as const }];
   const [selected, events, retained] = await Promise.all([
@@ -106,6 +120,10 @@ export default async function IssuePage({
           : null,
       ])
     : [null, null, null];
+  const originals = originalFrameSchema
+    .nullable()
+    .array()
+    .safeParse(selected?.originalFrames ?? []);
   const frames = safeFrameSchema.array().safeParse(selected?.frames ?? []);
   const breadcrumbs = safeBreadcrumbSchema
     .array()
@@ -211,7 +229,8 @@ export default async function IssuePage({
           <StackTrace
             key={selected?.id ?? "empty"}
             frames={frames.success ? frames.data : []}
-            release={selected?.release}
+            originals={originals.success ? originals.data : []}
+            state={selected?.symbolicationState}
           />
         </div>
         <aside className="panel event-aside">
@@ -281,6 +300,7 @@ export default async function IssuePage({
                   </div>
                 )}
               </dl>
+              <EventDiagnostics event={selected} />
               <div className="tags-section">
                 <h3>Tags</h3>
                 {tags.length ? (
@@ -306,6 +326,7 @@ export default async function IssuePage({
           )}
         </aside>
       </div>
+      <IssueActivity issueId={issue.id} activities={activities} />
       <EventTabs
         breadcrumbs={breadcrumbs.success ? breadcrumbs.data : []}
         events={
