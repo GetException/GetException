@@ -33,6 +33,7 @@
     "local:stop": "tsx scripts/local-preview.ts stop",
     "lint:fix": "eslint . --fix",
     "ci:tools": "python3 scripts/release/install-tools.py",
+    "ci:gitlab-config": "tsx scripts/gitlab-trust.ts",
     "release:check": "python3 scripts/release/check.py",
     "release:packages": "tsx scripts/release/registry.ts --publish",
     "release:registry-smoke": "tsx scripts/release/registry.ts",

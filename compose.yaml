@@ -65,6 +65,7 @@ services:
     volumes: [source-maps:/var/lib/getexception/source-maps]
     environment:
       SOURCE_MAP_DIR: /var/lib/getexception/source-maps
+      GITLAB_CI_TRUST: ${GITLAB_CI_TRUST:-}
       DATABASE_URL: postgresql://getexception_web:${WEB_PASSWORD}@postgres:5432/getexception
       DASHBOARD_ORIGIN: https://${DASHBOARD_HOST:-monitor.localhost}
       INGEST_ORIGIN: https://${INGEST_HOST:-ingest.monitor.localhost}

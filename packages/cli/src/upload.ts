@@ -2,6 +2,7 @@ import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import { readPrepared, readPreparedMap } from "./prepare";
 import { projectApi } from "./api";
+import type { CiCredential } from "./credentials";
 
 const receiptSchema = z.object({
   uploadId: z.string().uuid(),
@@ -19,7 +20,7 @@ export async function uploadMaps(
   directory: string,
   address: string,
   project: string,
-  token: string,
+  token: CiCredential,
   transport: typeof fetch = fetch,
 ) {
   const manifest = await readPrepared(directory);

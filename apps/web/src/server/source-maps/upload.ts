@@ -7,43 +7,9 @@ import {
 import { SourceMapStore } from "@getexception/source-maps";
 import type { AuthService } from "../auth-service";
 import { AuthError } from "../auth-error";
-import { digest } from "../crypto";
+import { authorizeUpload, assertUploadScope } from "./authorization";
 
-export async function authorizeUpload(
-  service: AuthService,
-  headers: Headers,
-  projectId: string,
-) {
-  const match = /^Bearer ([a-f0-9]{64})$/.exec(
-    headers.get("authorization") ?? "",
-  );
-
-  if (!match) {
-    throw new AuthError(401);
-  }
-
-  const credential = await service.db.sourceMapToken.findFirst({
-    where: {
-      projectId,
-      tokenHash: digest(match[1]!),
-      revokedAt: null,
-      expiresAt: { gt: new Date() },
-      project: { enabled: true, deletedAt: null },
-    },
-  });
-
-  if (!credential) {
-    await service.rateLimit(
-      headers.get("x-real-ip") ?? "unknown",
-      projectId,
-      "source_map_auth",
-    );
-
-    throw new AuthError(401);
-  }
-
-  return credential;
-}
+export { authorizeUpload } from "./authorization";
 
 export async function beginUpload(
   service: AuthService,
@@ -52,8 +18,10 @@ export async function beginUpload(
   value: unknown,
   store = new SourceMapStore(),
 ) {
-  await authorizeUpload(service, headers, projectId);
+  const principal = await authorizeUpload(service, headers, projectId);
   const input = sourceUploadSchema.parse(value);
+
+  assertUploadScope(principal, input.release, input.artifacts);
   const artifacts = input.artifacts
     .slice()
     .sort((a, b) => a.path.localeCompare(b.path));
@@ -124,14 +92,14 @@ export async function beginUpload(
       const existing = await tx.sourceArtifact.findMany({
         where: {
           projectId,
-          debugId: { in: artifacts.map((file) => file.debugId) },
+          OR: artifacts.map(({ debugId, path }) => ({ debugId, path })),
         },
-        distinct: ["debugId", "sha256"],
+        distinct: ["debugId", "path", "sha256"],
       });
       const prepared = await Promise.all(
         artifacts.map(async (file) => {
           const matches = existing.filter(
-            (item) => item.debugId === file.debugId,
+            (item) => item.debugId === file.debugId && item.path === file.path,
           );
 
           if (
@@ -229,7 +197,7 @@ export async function uploadArtifact(
   id: string,
   store = new SourceMapStore(),
 ) {
-  await authorizeUpload(service, request.headers, projectId);
+  const principal = await authorizeUpload(service, request.headers, projectId);
   const file = await service.db.sourceArtifact.findFirst({
     where: { id, projectId, uploadId, upload: { status: "receiving" } },
   });
@@ -237,6 +205,8 @@ export async function uploadArtifact(
   if (!file) {
     throw new AuthError(404);
   }
+
+  assertUploadScope(principal, file.release, [file]);
 
   const bytes = await readUploadBody(request, file.size);
 
@@ -247,7 +217,11 @@ export async function uploadArtifact(
     throw new AuthError(400, "source_map_checksum");
   }
 
-  await authorizeUpload(service, request.headers, projectId);
+  assertUploadScope(
+    await authorizeUpload(service, request.headers, projectId),
+    file.release,
+    [file],
+  );
   await service.db.$transaction(
     async (tx) => {
       const rows = await tx.$queryRaw<
@@ -276,18 +250,20 @@ export async function finishUpload(
   projectId: string,
   id: string,
 ) {
-  await authorizeUpload(service, headers, projectId);
+  const principal = await authorizeUpload(service, headers, projectId);
 
   return service.db.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM source_map_upload WHERE id = ${id} AND "projectId" = ${projectId} FOR UPDATE`;
     const upload = await tx.sourceMapUpload.findFirst({
       where: { id, projectId },
-      include: { artifacts: { select: { uploadedAt: true } } },
+      include: { artifacts: { select: { uploadedAt: true, path: true } } },
     });
 
     if (!upload) {
       throw new AuthError(404);
     }
+
+    assertUploadScope(principal, upload.release, upload.artifacts);
 
     if (upload.artifacts.some((file) => !file.uploadedAt)) {
       throw new AuthError(409, "source_map_incomplete");
@@ -316,17 +292,24 @@ export async function uploadStatus(
   projectId: string,
   id: string,
 ) {
-  await authorizeUpload(service, headers, projectId);
+  const principal = await authorizeUpload(service, headers, projectId);
   const upload = await service.db.sourceMapUpload.findFirst({
     where: { id, projectId },
-    select: { status: true, errorCode: true },
+    select: {
+      status: true,
+      errorCode: true,
+      release: true,
+      artifacts: { select: { path: true } },
+    },
   });
 
   if (!upload) {
     throw new AuthError(404);
   }
 
-  return upload;
+  assertUploadScope(principal, upload.release, upload.artifacts);
+
+  return { status: upload.status, errorCode: upload.errorCode };
 }
 
 export function checkUploadRequest(request: Request) {

@@ -34,9 +34,8 @@ export async function resolveFrames(
           projectId,
           release: event.release,
           upload: { status: "ready" },
-          ...(frame.debug_id
-            ? { debugId: frame.debug_id }
-            : { path: frame.filename.replace(/^\//, "") }),
+          path: frame.filename.replace(/^\//, ""),
+          ...(frame.debug_id ? { debugId: frame.debug_id } : {}),
         },
         distinct: ["sha256"],
         take: 2,

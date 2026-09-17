@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { parseGitlabTrust } from "./gitlab-ci";
+
+export { parseGitlabTrust, gitlabTrustSchema } from "./gitlab-ci";
 
 const mailEnabled = z
   .enum(["true", "false"])
@@ -32,8 +35,13 @@ export function webConfig(
       AUTH_RATE_KEY: z.string().regex(/^[a-f0-9]{64}$/),
       MAIL_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/),
       MAIL_ENABLED: mailEnabled,
+      GITLAB_CI_TRUST: z.string().max(65536).optional(),
     })
     .parse(env);
+
+  if (config.GITLAB_CI_TRUST) {
+    parseGitlabTrust(config.GITLAB_CI_TRUST);
+  }
 
   if (
     config.DASHBOARD_ORIGIN === config.INGEST_ORIGIN ||

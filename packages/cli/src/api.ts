@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
+import { authorizationHeader, type CiCredential } from "./credentials";
 
 export function projectApi(
   address: string,
   project: string,
-  token: string,
+  token: CiCredential,
   transport: typeof fetch = fetch,
 ) {
   const url = new URL(address);
@@ -20,13 +21,11 @@ export function projectApi(
     throw new Error("Use the HTTPS dashboard origin");
   }
 
-  if (
-    !z.string().uuid().safeParse(project).success ||
-    !/^[a-f0-9]{64}$/.test(token)
-  ) {
-    throw new Error("Set a valid project ID and GETEXCEPTION_UPLOAD_TOKEN");
+  if (!z.string().uuid().safeParse(project).success) {
+    throw new Error("Set a valid project ID");
   }
 
+  const authorization = authorizationHeader(token);
   const base = `${url.origin}/api/v1/projects/${project}`;
   const deadline = Date.now() + 120_000;
 
@@ -37,13 +36,15 @@ export function projectApi(
   ): Promise<unknown> {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (Date.now() >= deadline) {
-        throw new Error("Upload timed out; retain private artifacts and retry");
+        throw new Error(
+          "Upload timed out; retry within the job or run a new build",
+        );
       }
 
       const response = await transport(base + path, {
         method,
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: authorization,
           "Content-Type": "application/json",
         },
         body: body as BodyInit | undefined,

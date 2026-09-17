@@ -20,12 +20,14 @@ GetException.captureException(error, {
 
 ## Source maps в account
 
+Актуальная схема для MR — [прямая загрузка с удостоверением GitLab](gitlab-ci.md). Она не выдаёт постоянный CI token коду MR и не сохраняет карты в GitLab artifacts/cache. Описанные ниже постоянные upload tokens применимы только к доверенному CI.
+
 После выпуска новой версии сервера и npm-пакетов:
 
 1. Обновить `@getexception/react` и добавить dev dependency `@getexception/cli` из одного нового релиза. Убедиться, что SDK использует `release: account@<полный CI_COMMIT_SHA>`.
 2. Включить hidden/external JS source maps с `sourcesContent` в сборке account.
 3. Owner создаёт отдельный токен в Projects → account → Settings → Source map upload tokens. Сохранить его в GitLab как секрет `GETEXCEPTION_UPLOAD_TOKEN`; ID проекта — переменная `GETEXCEPTION_PROJECT_ID`. Токен никогда не попадает в `APP_*`, `VITE_*` или browser bundle. Доступ к нему только у доверенных CI jobs; не раскрывать секрет коду чужих MR.
-4. После сборки, до упаковки/deploy выполнить `prepare`, затем `upload` по [инструкции CLI](../packages/cli/README.md). Публиковать именно подготовленный JS. При недоступности GetException сохранить private artifact для повторной загрузки, разрешив отдельному upload job завершиться с ошибкой без блокировки срочного deploy.
+4. После сборки, до упаковки/deploy выполнить `prepare`, затем `upload` по [инструкции CLI](../packages/cli/README.md). Публиковать именно подготовленный JS. Для MR дождаться загрузки до deploy; при непроверенных правах GitLab не сохранять карты в artifacts/cache даже при сбое. Постоянный token нельзя выдавать MR для обхода отказа OIDC.
 5. В `sentryLogger` добавить только разрешённые API-поля из явного преобразования RequestError. Browser не нужно заполнять вручную. Уже добавленные routes, tags и breadcrumbs оставить.
 
 Карты выбираются в пределах проекта и релиза по Debug ID; для старого SDK без ID допускается точное совпадение URL path, только если кандидат один. Две разные сборки того же SHA с тем же именем JS требуют Debug ID. Неизвестный Debug ID не подменяется совпадением по пути.

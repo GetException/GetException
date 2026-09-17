@@ -1,7 +1,10 @@
 import { releaseRegistrationSchema } from "@getexception/protocol";
 import type { AuthService } from "../auth-service";
 import { AuthError } from "../auth-error";
-import { authorizeUpload } from "../source-maps/upload";
+import {
+  authorizeUpload,
+  assertReleaseScope,
+} from "../source-maps/authorization";
 
 export async function registerRelease(
   service: AuthService,
@@ -9,8 +12,10 @@ export async function registerRelease(
   projectId: string,
   value: unknown,
 ) {
-  await authorizeUpload(service, headers, projectId);
+  const principal = await authorizeUpload(service, headers, projectId);
   const input = releaseRegistrationSchema.parse(value);
+
+  assertReleaseScope(principal, input.release, input.deployment);
   const review = input.deployment.review;
   const reviewKey = review
     ? `gitlab:${review.repositoryId}:${review.number}`
