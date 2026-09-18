@@ -409,3 +409,9 @@ export {
   type BuildContext,
   type CiContext,
 } from "./ci";
+
+export {
+  ciFailureCodeSchema,
+  ciFailureSchema,
+  type CiFailureCode,
+} from "./ci-diagnostics";

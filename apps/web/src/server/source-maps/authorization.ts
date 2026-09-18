@@ -7,13 +7,14 @@ import { AuthError } from "../auth-error";
 import { digest } from "../crypto";
 import { authorizeGitlab, resolveGitlabContext } from "./gitlab";
 import { gitlabBinding } from "./policy";
+import { CiAuthError } from "./ci-error";
 
 export type UploadPrincipal =
   { kind: "token" } | { kind: "gitlab"; context: BuildContext };
 
 function gitlabIdentity(headers: Headers) {
   if (headers.has("origin")) {
-    throw new AuthError(403);
+    throw new CiAuthError("CI_ORIGIN_FORBIDDEN", 403);
   }
 
   return /^GitLab ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(
@@ -30,19 +31,42 @@ export async function authorizeCiContext(
 
   try {
     if (!jwt) {
-      throw new AuthError(401);
+      throw new CiAuthError(
+        headers.has("authorization") ? "CI_TOKEN_INVALID" : "CI_TOKEN_MISSING",
+      );
     }
 
     return await resolveGitlabContext(service, jwt, projectId);
-  } catch {
+  } catch (error) {
+    return rejectCiRequest(service, headers, projectId, error);
+  }
+}
+
+async function rejectCiRequest(
+  service: AuthService,
+  headers: Headers,
+  projectId: string,
+  error: unknown,
+): Promise<never> {
+  if (error instanceof CiAuthError && error.status >= 500) {
+    throw error;
+  }
+
+  try {
     await service.rateLimit(
       headers.get("x-real-ip") ?? "unknown",
       projectId,
       "source_map_auth",
     );
-
-    throw new AuthError(401);
+  } catch (limited) {
+    throw limited instanceof AuthError && limited.status === 429
+      ? new CiAuthError("CI_RATE_LIMITED", 429)
+      : new CiAuthError("CI_SERVER_ERROR", 503);
   }
+
+  throw error instanceof CiAuthError
+    ? error
+    : new CiAuthError("CI_TOKEN_INVALID");
 }
 
 export async function authorizeUpload(
@@ -69,13 +93,7 @@ export async function authorizeUpload(
         throw error;
       }
 
-      await service.rateLimit(
-        headers.get("x-real-ip") ?? "unknown",
-        projectId,
-        "source_map_auth",
-      );
-
-      throw new AuthError(401);
+      return rejectCiRequest(service, headers, projectId, error);
     }
   }
 

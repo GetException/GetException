@@ -5,6 +5,7 @@ import { uploadMaps } from "./upload";
 import { registerRelease } from "./releases";
 import { ciCredential } from "./credentials";
 import { buildContext } from "./ci";
+import { formatDiagnostic } from "./diagnostics";
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -105,10 +106,8 @@ async function main() {
   }
 }
 
-void main().catch(() => {
+void main().catch((error: unknown) => {
   // Never echo arguments, token values, maps, or server response bodies.
-  process.stderr.write(
-    "Command failed. Check options (--help), CI authentication, limits and build scope. Never publish maps as CI artifacts.\n",
-  );
+  process.stderr.write(formatDiagnostic(error));
   process.exitCode = 1;
 });

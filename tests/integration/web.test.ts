@@ -88,6 +88,31 @@ it("serves invitation pages with working per-request script nonces and rejects u
       },
     });
     const base = `http://127.0.0.1:${port}/api/v1/projects/${project.id}/source-maps`;
+    const ciBase = `http://127.0.0.1:${port}/api/v1/projects/${project.id}/ci`;
+    const requestIds = new Set<string>();
+
+    for (const [query, extraHeaders, status, code] of [
+      ["?version=2", {}, 401, "CI_TOKEN_MISSING"],
+      ["?version=999", {}, 400, "CI_CONTRACT_VERSION"],
+      ["?version=2", { Origin: origin }, 403, "CI_ORIGIN_FORBIDDEN"],
+    ] as const) {
+      const response = await fetch(ciBase + query, {
+        method: "POST",
+        headers: { ...extraHeaders, "X-Forwarded-Proto": "https" },
+      });
+      const result = await response.json();
+
+      expect(response.status).toBe(status);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(result).toEqual({
+        error: "CI request failed",
+        code,
+        requestId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+      });
+      requestIds.add(result.requestId);
+    }
+
+    expect(requestIds.size).toBe(3);
     const debugId = randomUUID();
     const payload =
       JSON.stringify({

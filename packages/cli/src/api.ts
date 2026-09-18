@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import { authorizationHeader, type CiCredential } from "./credentials";
+import { CliError, networkError } from "./diagnostics";
+import { responseJson, httpError } from "./api-response";
 
 export function projectApi(
   address: string,
@@ -8,7 +10,13 @@ export function projectApi(
   token: CiCredential,
   transport: typeof fetch = fetch,
 ) {
-  const url = new URL(address);
+  let url: URL;
+
+  try {
+    url = new URL(address);
+  } catch {
+    throw new CliError("CLI_CONFIGURATION");
+  }
 
   if (
     url.protocol !== "https:" ||
@@ -18,11 +26,11 @@ export function projectApi(
     url.hash ||
     url.pathname !== "/"
   ) {
-    throw new Error("Use the HTTPS dashboard origin");
+    throw new CliError("CLI_CONFIGURATION");
   }
 
   if (!z.string().uuid().safeParse(project).success) {
-    throw new Error("Set a valid project ID");
+    throw new CliError("CLI_CONFIGURATION");
   }
 
   const authorization = authorizationHeader(token);
@@ -36,39 +44,41 @@ export function projectApi(
   ): Promise<unknown> {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (Date.now() >= deadline) {
-        throw new Error(
-          "Upload timed out; retry within the job or run a new build",
-        );
+        throw new CliError("NETWORK_TIMEOUT");
       }
 
-      const response = await transport(base + path, {
-        method,
-        headers: {
-          Authorization: authorization,
-          "Content-Type": "application/json",
-        },
-        body: body as BodyInit | undefined,
-        redirect: "error",
-        credentials: "omit",
-        signal: AbortSignal.timeout(Math.min(30_000, deadline - Date.now())),
-      });
+      let response: Response;
+
+      try {
+        response = await transport(base + path, {
+          method,
+          headers: {
+            Authorization: authorization,
+            "Content-Type": "application/json",
+          },
+          body: body as BodyInit | undefined,
+          redirect: "error",
+          credentials: "omit",
+          signal: AbortSignal.timeout(Math.min(30_000, deadline - Date.now())),
+        });
+      } catch (error) {
+        throw networkError(error);
+      }
 
       if (response.ok) {
-        return response.json();
+        return responseJson(response);
       }
 
       if ((response.status === 429 || response.status >= 500) && attempt < 2) {
-        await response.body?.cancel();
+        await response.body?.cancel().catch(() => undefined);
         await delay(1000 * 2 ** attempt);
 
         continue;
       }
 
-      await response.body?.cancel();
-
-      throw new Error(`Source map API returned HTTP ${response.status}`);
+      throw await httpError(response);
     }
 
-    throw new Error("Upload failed");
+    throw new CliError("COMMAND_FAILED");
   };
 }

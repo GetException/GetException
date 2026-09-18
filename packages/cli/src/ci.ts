@@ -1,6 +1,7 @@
 import { ciContextSchema } from "@getexception/protocol";
 import { projectApi } from "./api";
 import type { CiCredential } from "./credentials";
+import { CliError } from "./diagnostics";
 
 export async function buildContext(
   address: string,
@@ -8,7 +9,7 @@ export async function buildContext(
   credential: CiCredential,
   transport: typeof fetch = fetch,
 ) {
-  return ciContextSchema.parse(
+  const result = ciContextSchema.safeParse(
     await projectApi(
       address,
       project,
@@ -16,4 +17,10 @@ export async function buildContext(
       transport,
     )("/ci?version=2", "POST"),
   );
+
+  if (!result.success) {
+    throw new CliError("CONTRACT_RESPONSE", 200);
+  }
+
+  return result.data;
 }

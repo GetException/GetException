@@ -8,8 +8,8 @@ import {
   type CiContext,
 } from "@getexception/protocol";
 import type { AuthService } from "../auth-service";
-import { AuthError } from "../auth-error";
 import { effectiveSourceMapPolicy, gitlabBinding } from "./policy";
+import { CiAuthError, identityFailure } from "./ci-error";
 
 const identifier = z
   .union([
@@ -61,7 +61,7 @@ export async function authorizeGitlab(
     !("release" in context) ||
     (operation === "maps" && !context.sourceMaps.enabled)
   ) {
-    throw new AuthError(403);
+    throw new CiAuthError("CI_POLICY_DENIED", 403);
   }
 
   return buildContextSchema.parse({
@@ -79,8 +79,12 @@ export async function resolveGitlabContext(
   try {
     const raw = service.config.GITLAB_CI_TRUST;
 
-    if (!raw || jwt.length > 16384) {
-      throw new Error("Unconfigured build identity");
+    if (!raw) {
+      throw new CiAuthError("CI_TRUST_UNCONFIGURED");
+    }
+
+    if (jwt.length > 16384) {
+      throw new CiAuthError("CI_TOKEN_INVALID");
     }
 
     let verifier = verifiers.get(service);
@@ -98,7 +102,7 @@ export async function resolveGitlabContext(
     );
 
     if (!binding) {
-      throw new Error("Unknown build project");
+      throw new CiAuthError("CI_PROJECT_UNAVAILABLE");
     }
 
     const { payload, protectedHeader } = await jwtVerify(jwt, keys, {
@@ -107,26 +111,44 @@ export async function resolveGitlabContext(
       audience: service.config.DASHBOARD_ORIGIN,
       requiredClaims: ["exp", "iat", "nbf", "jti", "sub"],
       maxTokenAge: 3600,
+    }).catch((error: unknown) => {
+      throw identityFailure(error);
     });
 
+    if (payload.aud !== service.config.DASHBOARD_ORIGIN) {
+      throw new CiAuthError("CI_IDENTITY_AUDIENCE");
+    }
+
     if (
-      payload.aud !== service.config.DASHBOARD_ORIGIN ||
       !payload.exp ||
       !payload.iat ||
       payload.exp - payload.iat > 3600 ||
-      payload.exp <= payload.iat ||
-      !payload.jti ||
-      payload.jti.length > 256 ||
+      payload.exp <= payload.iat
+    ) {
+      throw new CiAuthError("CI_IDENTITY_TIME");
+    }
+
+    if (!payload.jti || payload.jti.length > 256) {
+      throw new CiAuthError("CI_IDENTITY_CLAIMS");
+    }
+
+    if (
       !protectedHeader.kid ||
       (protectedHeader.typ !== undefined && protectedHeader.typ !== "JWT") ||
       Object.keys(protectedHeader).some(
         (name) => !["alg", "kid", "typ"].includes(name),
       )
     ) {
-      throw new Error("Invalid build identity");
+      throw new CiAuthError("CI_IDENTITY_HEADER");
     }
 
-    const claims = claimsSchema.parse(payload);
+    const parsed = claimsSchema.safeParse(payload);
+
+    if (!parsed.success) {
+      throw new CiAuthError("CI_IDENTITY_CLAIMS");
+    }
+
+    const claims = parsed.data;
     const expectedRef = `refs/${claims.ref_type === "branch" ? "heads" : "tags"}/${claims.ref}`;
     const configRef = `${new URL(trust.issuer).host}/${claims.project_path}//.gitlab-ci.yml@${expectedRef}`;
     const primary =
@@ -158,12 +180,21 @@ export async function resolveGitlabContext(
 
     if (
       (claims.project_id === String(binding.repositoryId)) !==
-        (claims.project_path === binding.repositoryPath) ||
-      (jobClaimsPresent && !jobInSource && !forkInPrimary) ||
-      claims.ref_path !== expectedRef ||
-      (!sourceConfig && !parentConfig)
+      (claims.project_path === binding.repositoryPath)
     ) {
-      throw new Error("Mismatched build identity");
+      throw new CiAuthError("CI_IDENTITY_SOURCE");
+    }
+
+    if (jobClaimsPresent && !jobInSource && !forkInPrimary) {
+      throw new CiAuthError("CI_IDENTITY_EXECUTION");
+    }
+
+    if (claims.ref_path !== expectedRef) {
+      throw new CiAuthError("CI_IDENTITY_REF");
+    }
+
+    if (!sourceConfig && !parentConfig) {
+      throw new CiAuthError("CI_IDENTITY_CONFIG");
     }
 
     const production = claims.environment === binding.productionEnvironment;
@@ -182,14 +213,14 @@ export async function resolveGitlabContext(
             : expectedRef === ref,
         )
       ) {
-        throw new Error("Production build is not trusted");
+        throw new CiAuthError("CI_IDENTITY_PRODUCTION");
       }
     } else if (
       !preview ||
       claims.ref_type !== "branch" ||
       (!primary && claims.pipeline_source !== "merge_request_event")
     ) {
-      throw new Error("Unknown build environment");
+      throw new CiAuthError("CI_IDENTITY_ENVIRONMENT");
     }
 
     const project = await service.db.project.findFirst({
@@ -198,7 +229,7 @@ export async function resolveGitlabContext(
     });
 
     if (!project) {
-      throw new Error("Inactive build project");
+      throw new CiAuthError("CI_PROJECT_UNAVAILABLE");
     }
 
     const policy = effectiveSourceMapPolicy(
@@ -227,7 +258,7 @@ export async function resolveGitlabContext(
           )
         : null;
 
-    return ciContextSchema.parse({
+    const result = ciContextSchema.safeParse({
       version: 2,
       sourceMaps:
         production || policy.previewEnabled
@@ -248,8 +279,18 @@ export async function resolveGitlabContext(
           : {}),
       },
     });
-  } catch {
+
+    if (!result.success) {
+      // Signed labels can still contain an unsupported MR number. This is an
+      // identity rejection, not a database outage, and must remain rate limited.
+      throw new CiAuthError("CI_IDENTITY_ENVIRONMENT");
+    }
+
+    return result.data;
+  } catch (error) {
     // Never expose JWT claims, key material or validation-library errors.
-    throw new AuthError(401);
+    throw error instanceof CiAuthError
+      ? error
+      : new CiAuthError("CI_SERVER_ERROR", 503);
   }
 }

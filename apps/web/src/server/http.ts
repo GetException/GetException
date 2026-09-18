@@ -1,6 +1,7 @@
 import { boundedJson } from "@getexception/protocol";
 import { AuthError } from "./auth-error";
 import { getRuntime } from "./runtime";
+import { CiAuthError, ciFailure } from "./source-maps/ci-error";
 
 export const SETUP_COOKIE = "__Host-getexception.setup";
 
@@ -84,6 +85,13 @@ export async function safeRoute(fn: () => Promise<Response>) {
   try {
     return await fn();
   } catch (error) {
+    if (error instanceof CiAuthError) {
+      return json(
+        { error: "CI request failed", ...ciFailure(error) },
+        error.status,
+      );
+    }
+
     const status =
       error instanceof AuthError
         ? error.status
