@@ -37,11 +37,13 @@ GetException.captureException(error, {
 Все запросы идут на HTTPS dashboard origin с `Authorization: Bearer <upload token>` и без Origin/cookies. Session и публичный DSN не дают права загрузки.
 
 - `POST /api/v1/projects/:project/source-maps`: JSON `{release, artifacts:[{path, debugId, sha256, size}]}`; ответ `{uploadId,status,artifacts:[{id,path}]}`.
-- `PUT /api/v1/projects/:project/source-maps/:upload/:artifact`: содержимое одного JSON map, `Content-Type: application/json`.
+- `PUT /api/v1/projects/:project/source-maps/:upload/:artifact`: содержимое одного JSON map, `Content-Type: application/json`. CLI передаёт его с `Content-Encoding: gzip`; сервер ограничивает как сжатый, так и распакованный размер, затем проверяет исходный размер и SHA-256. Старые CLI без gzip остаются совместимыми.
 - `POST /api/v1/projects/:project/source-maps/:upload`: подтвердить комплектность, поставить проверку в очередь.
 - `GET /api/v1/projects/:project/source-maps/:upload`: только статус `receiving/pending/validating/ready/failed` и фиксированный код ошибки, без содержимого карты.
 
 Публикация атомарна для всего upload: worker проверяет checksum, v3-структуру, Debug ID, имя JS и mappings всех файлов. Parser выполняется в отдельном worker thread без переменных окружения родителя, с лимитом памяти и пятисекундным deadline. Один parser на процесс, последовательная очередь чтения файлов; production worker подключён только к внутренней сети БД и не скачивает исходники по URL. Несколько worker-процессов используют leases с heartbeat и защитой от устаревшего владельца.
+
+Файлы одного upload принимаются параллельно под разделяемой блокировкой. Финализация получает исключительную блокировку, ждёт завершения всех уже начатых записей и только затем переводит полный набор в `pending`. Повтор того же manifest возвращает прежний upload и отмечает уже сохранённые файлы: CI досылает только отсутствующие данные. Это устраняет зависимость времени доставки от количества HTTP-запросов и сохраняет атомарную публикацию.
 
 Поздняя загрузка увеличивает версию карт релиза. Worker повторно обрабатывает его события, пересчитывает группировку, сохраняет историю переноса. Уже решённая ошибка не становится regression из-за одной лишь загрузки карт. Исходный stack остаётся рядом с восстановленным; UI выводит исходный код как текст.
 

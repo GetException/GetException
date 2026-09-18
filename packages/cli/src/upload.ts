@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
+import { constants, gzip } from "node:zlib";
 import { readPrepared, readPreparedMap } from "./prepare";
 import { projectApi } from "./api";
 import type { CiCredential } from "./credentials";
@@ -17,6 +19,8 @@ const receiptSchema = z.object({
 });
 
 const uploadConcurrency = 8;
+const uploadDeadlineMs = 20 * 60_000;
+const gzipAsync = promisify(gzip);
 
 export async function uploadMaps(
   directory: string,
@@ -26,9 +30,16 @@ export async function uploadMaps(
   transport: typeof fetch = fetch,
 ) {
   const manifest = await readPrepared(directory);
-  const api = projectApi(address, project, token, transport);
-  const request = (path: string, method = "GET", body?: string | Uint8Array) =>
-    api("/source-maps" + path, method, body);
+  const api = projectApi(address, project, token, transport, {
+    deadlineMs: uploadDeadlineMs,
+    requestTimeoutMs: 60_000,
+  });
+  const request = (
+    path: string,
+    method = "GET",
+    body?: string | Uint8Array,
+    contentEncoding?: "gzip",
+  ) => api("/source-maps" + path, method, body, contentEncoding);
 
   const receipt = receiptSchema.parse(
     await request("", "POST", JSON.stringify(manifest)),
@@ -63,13 +74,19 @@ export async function uploadMaps(
 
       // Keep each wave bounded so a failed request stops before more files start.
       await Promise.all(
-        group.map(async ({ entry, id }) =>
-          request(
+        group.map(async ({ entry, id }) => {
+          const bytes = await readPreparedMap(directory, entry);
+          const compressed = await gzipAsync(bytes, {
+            level: constants.Z_BEST_SPEED,
+          });
+
+          return request(
             `/${receipt.uploadId}/${id}`,
             "PUT",
-            await readPreparedMap(directory, entry),
-          ),
-        ),
+            compressed,
+            "gzip",
+          );
+        }),
       );
     }
 

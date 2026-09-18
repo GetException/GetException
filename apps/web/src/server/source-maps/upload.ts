@@ -1,15 +1,35 @@
 import { createHash, randomUUID } from "node:crypto";
+import { promisify } from "node:util";
+import { gunzip } from "node:zlib";
 import {
   boundedJson,
   SOURCE_MAP_LIMITS,
   sourceUploadSchema,
 } from "@getexception/protocol";
+import type { Transaction } from "@getexception/db";
 import { SourceMapStore } from "@getexception/source-maps";
 import type { AuthService } from "../auth-service";
 import { AuthError } from "../auth-error";
 import { authorizeUpload, assertUploadScope } from "./authorization";
 
 export { authorizeUpload } from "./authorization";
+
+const gunzipAsync = promisify(gunzip);
+const compressedBodyOverhead = 64 * 1024;
+
+async function lockUpload(
+  tx: Transaction,
+  uploadId: string,
+  mode: "shared" | "exclusive",
+) {
+  if (mode === "shared") {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtextextended(${uploadId}, 73104622))`;
+
+    return;
+  }
+
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${uploadId}, 73104622))`;
+}
 
 export async function beginUpload(
   service: AuthService,
@@ -208,7 +228,7 @@ export async function uploadArtifact(
 
   assertUploadScope(principal, file.release, [file]);
 
-  const bytes = await readUploadBody(request, file.size);
+  const bytes = await readUploadBody(request, file.size, true);
 
   if (
     bytes.length !== file.size ||
@@ -224,17 +244,26 @@ export async function uploadArtifact(
   );
   await service.db.$transaction(
     async (tx) => {
-      const rows = await tx.$queryRaw<
-        { id: string }[]
-      >`SELECT id FROM source_map_upload WHERE id = ${uploadId} AND "projectId" = ${projectId} AND status = 'receiving' FOR UPDATE`;
+      // A shared advisory lock lets separate artifacts write concurrently. The
+      // finalize operation takes the matching exclusive lock and therefore
+      // cannot publish a batch while any artifact is still being written.
+      await lockUpload(tx, uploadId, "shared");
+      const current = await tx.sourceArtifact.findFirst({
+        where: {
+          id,
+          projectId,
+          uploadId,
+          upload: { status: "receiving" },
+        },
+      });
 
-      if (!rows.length) {
+      if (!current) {
         throw new AuthError(409);
       }
 
-      await store.write(file.storageId, bytes);
+      await store.write(current.storageId, bytes);
       await tx.sourceArtifact.update({
-        where: { id: file.id },
+        where: { id: current.id },
         data: { uploadedAt: new Date() },
       });
     },
@@ -253,6 +282,9 @@ export async function finishUpload(
   const principal = await authorizeUpload(service, headers, projectId);
 
   return service.db.$transaction(async (tx) => {
+    // Wait for every in-flight artifact write, then prevent new writes from
+    // starting until the batch has moved out of the receiving state.
+    await lockUpload(tx, id, "exclusive");
     await tx.$queryRaw`SELECT id FROM source_map_upload WHERE id = ${id} AND "projectId" = ${projectId} FOR UPDATE`;
     const upload = await tx.sourceMapUpload.findFirst({
       where: { id, projectId },
@@ -322,15 +354,29 @@ export function checkUploadRequest(request: Request) {
   }
 }
 
-export async function readUploadBody(request: Request, max: number) {
+export async function readUploadBody(
+  request: Request,
+  max: number,
+  allowGzip = false,
+) {
+  const encoding = request.headers.get("content-encoding") ?? "identity";
+
   if (
     request.headers.get("content-type")?.split(";")[0] !== "application/json" ||
-    ![null, "identity"].includes(request.headers.get("content-encoding"))
+    !["identity", ...(allowGzip ? ["gzip"] : [])].includes(encoding)
   ) {
     throw new AuthError(415);
   }
 
-  if (Number(request.headers.get("content-length") ?? 0) > max) {
+  const wireLimit =
+    encoding === "gzip"
+      ? Math.min(
+          SOURCE_MAP_LIMITS.fileBytes + compressedBodyOverhead,
+          max + compressedBodyOverhead,
+        )
+      : max;
+
+  if (Number(request.headers.get("content-length") ?? 0) > wireLimit) {
     throw new AuthError(413);
   }
 
@@ -352,7 +398,7 @@ export async function readUploadBody(request: Request, max: number) {
 
     size += value.length;
 
-    if (size > max) {
+    if (size > wireLimit) {
       await reader.cancel();
 
       throw new AuthError(413);
@@ -361,7 +407,19 @@ export async function readUploadBody(request: Request, max: number) {
     chunks.push(value);
   }
 
-  return Buffer.concat(chunks, size);
+  const bytes = Buffer.concat(chunks, size);
+
+  if (encoding === "identity") {
+    return bytes;
+  }
+
+  try {
+    return await gunzipAsync(bytes, { maxOutputLength: max });
+  } catch {
+    // Compression errors are intentionally indistinguishable from malformed
+    // artifact bytes and never expose the zlib message to CI.
+    throw new AuthError(400, "source_map_checksum");
+  }
 }
 
 export async function readUploadManifest(request: Request) {

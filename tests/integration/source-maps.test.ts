@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { writeFile, mkdir, readFile, symlink } from "node:fs/promises";
 import { createDatabase } from "@getexception/db";
 import { sanitizeEvent } from "@getexception/protocol";
@@ -21,7 +22,11 @@ import { claim, processJob } from "../../apps/worker/src/events";
 import { validateOneUpload } from "../../apps/worker/src/source-maps/uploads";
 import { reprocessOneEvent } from "../../apps/worker/src/source-maps/reprocess";
 import { retainSourceMaps } from "../../apps/worker/src/source-maps/retention";
-import { prepareMaps, readPreparedMap } from "../../packages/cli/src/prepare";
+import {
+  checksum,
+  prepareMaps,
+  readPreparedMap,
+} from "../../packages/cli/src/prepare";
 import { uploadMaps } from "../../packages/cli/src/upload";
 
 let instance: Awaited<ReturnType<typeof temporaryDatabase>>;
@@ -230,6 +235,29 @@ it("uploads privately, publishes atomically and reprocesses old events with audi
     ),
   ).rejects.toMatchObject({ status: 400 });
   const bytes = await readPreparedMap(privateDir, manifest.artifacts[0]!);
+  const oversizedCompressed = new Request(
+    "https://monitor.example.test/upload",
+    {
+      method: "PUT",
+      headers: {
+        ...Object.fromEntries(headers),
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+      },
+      body: new Uint8Array(gzipSync(Buffer.alloc(bytes.length + 1))),
+    },
+  );
+
+  await expect(
+    uploadArtifact(
+      service,
+      oversizedCompressed,
+      projectId,
+      receipt.uploadId,
+      artifact.id,
+      store,
+    ),
+  ).rejects.toMatchObject({ status: 400 });
 
   await uploadArtifact(
     service,
@@ -373,8 +401,122 @@ it("uploads privately, publishes atomically and reprocesses old events with audi
   await expect(readFile(join(dist, "app.js.map"))).rejects.toThrow();
 });
 
+it("accepts compressed artifacts concurrently and finalizes only after every write", async () => {
+  const concurrentRelease = `account@${"d".repeat(40)}`;
+  const artifacts = Array.from({ length: 8 }, (_, index) => {
+    const path = `assets/concurrent-${index}.js`;
+    const debugId = randomUUID();
+    const bytes = Buffer.from(
+      JSON.stringify({
+        version: 3,
+        file: path,
+        debug_id: debugId,
+        sources: [`src/concurrent-${index}.ts`],
+        sourcesContent: [`export const value = ${index};`],
+        names: [],
+        mappings: "AAAA",
+      }),
+    );
+
+    return {
+      bytes,
+      entry: {
+        path,
+        debugId,
+        sha256: checksum(bytes),
+        size: bytes.length,
+      },
+    };
+  });
+  const receipt = await beginUpload(
+    service,
+    headers,
+    projectId,
+    {
+      release: concurrentRelease,
+      artifacts: artifacts.map(({ entry }) => entry),
+    },
+    store,
+  );
+  let active = 0;
+  let maximum = 0;
+  let releaseWrites!: () => void;
+  let allStarted!: () => void;
+  const writesReleased = new Promise<void>((resolve) => {
+    releaseWrites = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    allStarted = resolve;
+  });
+
+  class ConcurrentStore extends SourceMapStore {
+    override async write(id: string, bytes: Uint8Array) {
+      active += 1;
+      maximum = Math.max(maximum, active);
+
+      if (active === artifacts.length) {
+        allStarted();
+      }
+
+      await writesReleased;
+
+      try {
+        await super.write(id, bytes);
+      } finally {
+        active -= 1;
+      }
+    }
+  }
+
+  const concurrentStore = new ConcurrentStore(store.root);
+  const uploads = artifacts.map(({ bytes, entry }) => {
+    const remote = receipt.artifacts.find((item) => item.path === entry.path);
+
+    expect(remote).toBeDefined();
+
+    return uploadArtifact(
+      service,
+      new Request("https://monitor.example.test/upload", {
+        method: "PUT",
+        headers: {
+          ...Object.fromEntries(headers),
+          "content-type": "application/json",
+          "content-encoding": "gzip",
+        },
+        body: new Uint8Array(gzipSync(bytes)),
+      }),
+      projectId,
+      receipt.uploadId,
+      remote!.id,
+      concurrentStore,
+    );
+  });
+
+  let serializationTimeout: NodeJS.Timeout | undefined;
+
+  await Promise.race([
+    started,
+    new Promise<void>((_, reject) => {
+      serializationTimeout = setTimeout(
+        () => reject(new Error("Artifact writes were serialized")),
+        5000,
+      );
+    }),
+  ]).finally(() => clearTimeout(serializationTimeout));
+  const finalized = finishUpload(service, headers, projectId, receipt.uploadId);
+
+  releaseWrites();
+  await Promise.all([...uploads, finalized]);
+  expect(maximum).toBe(artifacts.length);
+  expect(
+    await web.sourceMapUpload.findUniqueOrThrow({
+      where: { id: receipt.uploadId },
+    }),
+  ).toMatchObject({ status: "pending" });
+  expect(await validateOneUpload(worker, concurrentStore)).toBe(true);
+});
+
 it("rejects malformed maps as an entire batch and never exposes partial artifacts", async () => {
-  const { checksum } = await import("../../packages/cli/src/prepare");
   const bytes = Buffer.from('{"version":3,"mappings":"AAAA"}');
   const manifest = {
     release,
@@ -426,7 +568,7 @@ it("rejects malformed maps as an entire batch and never exposes partial artifact
 
 it("reuses private bytes across releases, rejects conflicting IDs and preserves shared files during retention", async () => {
   const first = await web.sourceArtifact.findFirstOrThrow({
-    where: { projectId, upload: { status: "ready" } },
+    where: { projectId, path: "app.js", upload: { status: "ready" } },
   });
   const nextRelease = `account@${"c".repeat(40)}`;
   const input = {

@@ -58,21 +58,25 @@ it.each([
 ])(
   "classifies network code %s without printing native errors",
   async (code, expected) => {
+    vi.useFakeTimers();
     const error = new TypeError(canary, {
       cause: Object.assign(new Error(canary), { code }),
     });
+    const transport = vi.fn<typeof fetch>().mockRejectedValue(error);
     const request = projectApi(
       ciAudience,
       ciProject,
       "a".repeat(64),
-      async () => {
-        throw error;
-      },
+      transport,
     );
-
-    await expect(request("/ci?version=2", "POST")).rejects.toMatchObject({
+    const pending = request("/ci?version=2", "POST");
+    const assertion = expect(pending).rejects.toMatchObject({
       code: expected,
     });
+
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(transport).toHaveBeenCalledTimes(expected === "NETWORK_TLS" ? 1 : 3);
     expect(formatDiagnostic(networkError(error))).toBe(
       `GETEXCEPTION_DIAGNOSTIC ${JSON.stringify({ version: 1, code: expected })}\n`,
     );

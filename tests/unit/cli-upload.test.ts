@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, expect, it } from "vitest";
 import { uploadMaps } from "../../packages/cli/src/upload";
 
@@ -62,6 +63,10 @@ it("uploads a full source map batch with bounded parallel requests", async () =>
       }
 
       if (request.method === "PUT") {
+        expect(request.headers.get("content-encoding")).toBe("gzip");
+        expect(gunzipSync(Buffer.from(await request.arrayBuffer()))).toEqual(
+          bytes,
+        );
         active += 1;
         uploads += 1;
         maximum = Math.max(maximum, active);

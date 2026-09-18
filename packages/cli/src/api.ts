@@ -4,11 +4,26 @@ import { authorizationHeader, type CiCredential } from "./credentials";
 import { CliError, networkError } from "./diagnostics";
 import { responseJson, httpError } from "./api-response";
 
+type ProjectApiOptions = {
+  deadlineMs?: number;
+  requestTimeoutMs?: number;
+};
+
+function retryableNetworkError(error: CliError) {
+  return [
+    "NETWORK_DNS",
+    "NETWORK_CONNECTION",
+    "NETWORK_TIMEOUT",
+    "NETWORK_ERROR",
+  ].includes(error.code);
+}
+
 export function projectApi(
   address: string,
   project: string,
   token: CiCredential,
   transport: typeof fetch = fetch,
+  options: ProjectApiOptions = {},
 ) {
   let url: URL;
 
@@ -35,12 +50,14 @@ export function projectApi(
 
   const authorization = authorizationHeader(token);
   const base = `${url.origin}/api/v1/projects/${project}`;
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + (options.deadlineMs ?? 120_000);
+  const requestTimeout = options.requestTimeoutMs ?? 30_000;
 
   return async function request(
     path: string,
     method = "GET",
     body?: string | Uint8Array,
+    contentEncoding?: "gzip",
   ): Promise<unknown> {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (Date.now() >= deadline) {
@@ -55,14 +72,25 @@ export function projectApi(
           headers: {
             Authorization: authorization,
             "Content-Type": "application/json",
+            ...(contentEncoding ? { "Content-Encoding": contentEncoding } : {}),
           },
           body: body as BodyInit | undefined,
           redirect: "error",
           credentials: "omit",
-          signal: AbortSignal.timeout(Math.min(30_000, deadline - Date.now())),
+          signal: AbortSignal.timeout(
+            Math.min(requestTimeout, deadline - Date.now()),
+          ),
         });
       } catch (error) {
-        throw networkError(error);
+        const failure = networkError(error);
+
+        if (retryableNetworkError(failure) && attempt < 2) {
+          await delay(1000 * 2 ** attempt);
+
+          continue;
+        }
+
+        throw failure;
       }
 
       if (response.ok) {
