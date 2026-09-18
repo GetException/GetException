@@ -1,6 +1,6 @@
 {
   "name": "@getexception/browser",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Browser error monitoring for self-hosted GetException installations",
   "type": "module",
   "license": "MIT",
