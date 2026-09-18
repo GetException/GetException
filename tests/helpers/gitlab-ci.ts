@@ -24,6 +24,14 @@ export const ciForkClaims = {
   ci_config_ref_uri: `gitlab.example.test/${ciFork.repositoryPath}//.gitlab-ci.yml@refs/heads/feature`,
 };
 
+// GitLab 19.3.2 uses the execution project's config URI even for a fork MR.
+export const ciForkParentClaims = {
+  ...ciForkClaims,
+  job_project_id: "123",
+  job_project_path: ciRepository,
+  ci_config_ref_uri: `gitlab.example.test/${ciRepository}//.gitlab-ci.yml@refs/heads/feature`,
+};
+
 export function gitlabFixture(projectId = ciProject) {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,

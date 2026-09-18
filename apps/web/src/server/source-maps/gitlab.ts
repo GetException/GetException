@@ -172,11 +172,19 @@ export async function resolveGitlabContext(
       [configRef, `https://${configRef}`, `http://${configRef}`].includes(
         claims.ci_config_ref_uri ?? "",
       );
-    // GitLab omits both config claims for a fork MR executed in the parent project.
+    const parentConfigRef = `${new URL(trust.issuer).host}/${binding.repositoryPath}//.gitlab-ci.yml@${expectedRef}`;
+    // Older GitLab versions omit both config claims for a fork MR in the parent.
+    // GitLab 19.3.2 instead signs the execution project's URI and pipeline SHA.
+    // Both forms require the explicit, signed parent execution identity.
     const parentConfig =
       forkInPrimary &&
-      claims.ci_config_ref_uri === null &&
-      claims.ci_config_sha === null;
+      ((claims.ci_config_ref_uri === null && claims.ci_config_sha === null) ||
+        (claims.ci_config_sha === claims.sha &&
+          [
+            parentConfigRef,
+            `https://${parentConfigRef}`,
+            `http://${parentConfigRef}`,
+          ].includes(claims.ci_config_ref_uri ?? "")));
 
     if (
       (claims.project_id === String(binding.repositoryId)) !==

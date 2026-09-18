@@ -12,7 +12,7 @@ import {
   ciSha,
   ciRepository,
   ciFork,
-  ciForkClaims,
+  ciForkParentClaims,
 } from "../helpers/gitlab-ci";
 import { createRuntime } from "../../apps/web/src/server/runtime";
 import { token } from "../../apps/web/src/server/crypto";
@@ -83,7 +83,7 @@ beforeAll(async () => {
       trustedSources: [ciFork],
     },
   });
-  jwt = await fixture.sign(ciForkClaims);
+  jwt = await fixture.sign(ciForkParentClaims);
   headers = new Headers({
     authorization: `GitLab ${jwt}`,
     "x-real-ip": "test",
@@ -95,7 +95,7 @@ afterAll(async () => {
   await instance?.cleanup();
 });
 
-it("prepares, uploads and resolves a fork MR map using only its signed identity", async () => {
+it("prepares, uploads and resolves a GitLab 19.3.2 fork MR in the parent project using only its signed identity", async () => {
   const context = await authorizeGitlab(service, jwt, projectId);
   const dist = join(instance.directory, "dist");
 

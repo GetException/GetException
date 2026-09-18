@@ -18,6 +18,7 @@ import {
   ciRepository,
   ciFork,
   ciForkClaims,
+  ciForkParentClaims,
 } from "../helpers/gitlab-ci";
 import {
   authorizationHeader,
@@ -431,6 +432,103 @@ it("returns explicit disabled policy decisions without granting upload and prese
       sourceMaps: { enabled: false, reason: "source_not_allowed" },
     });
   }
+});
+
+it.each(["", "https://", "http://"])(
+  "accepts GitLab 19.3.2 fork config in the parent project (%s)",
+  async (scheme) => {
+    const context = await authorizeGitlab(
+      service,
+      await fixture.sign({
+        ...ciForkParentClaims,
+        ci_config_ref_uri: scheme + ciForkParentClaims.ci_config_ref_uri,
+      }),
+      ciProject,
+    );
+
+    expect(context).toEqual({
+      release: `account@${ciSha}`,
+      assetPrefix: "assets/ge-gl-123-456/",
+      deployment: {
+        environment: "staging",
+        review: { provider: "gitlab", repositoryId: 123, number: 554 },
+      },
+    });
+  },
+);
+
+it.each([
+  {
+    job_project_id: String(ciFork.repositoryId),
+    job_project_path: ciFork.repositoryPath,
+  },
+  { job_project_id: undefined, job_project_path: undefined },
+  { job_project_id: undefined },
+  { job_project_path: undefined },
+  { job_project_id: "999", job_project_path: "untrusted/account" },
+  { pipeline_source: "push" },
+  { environment: "production/app", ref_protected: "true" },
+  { ci_config_sha: "b".repeat(40) },
+  { ci_config_sha: null },
+  { ci_config_ref_uri: null },
+  {
+    ci_config_ref_uri: `evil.test/${ciRepository}//.gitlab-ci.yml@refs/heads/feature`,
+  },
+  {
+    ci_config_ref_uri: `gitlab.example.test/untrusted/account//.gitlab-ci.yml@refs/heads/feature`,
+  },
+  {
+    ci_config_ref_uri: `gitlab.example.test/${ciRepository}//other.yml@refs/heads/feature`,
+  },
+  {
+    ci_config_ref_uri: `gitlab.example.test/${ciRepository}//.gitlab-ci.yml@refs/heads/stable`,
+  },
+  {
+    ci_config_ref_uri: `gitlab.example.test/${ciRepository}//.gitlab-ci.yml@refs/merge-requests/554/merge`,
+  },
+])(
+  "rejects a contradictory GitLab 19.3.2 parent config: %j",
+  async (changes) => {
+    await expect(
+      authorizeGitlab(
+        service,
+        await fixture.sign({ ...ciForkParentClaims, ...changes }),
+        ciProject,
+      ),
+    ).rejects.toMatchObject({ status: 401 });
+  },
+);
+
+it("applies Owner policy to GitLab 19.3.2 parent config before granting upload or registration", async () => {
+  const jwt = await fixture.sign(ciForkParentClaims);
+
+  activeProject.mockResolvedValue({
+    id: ciProject,
+    sourceMapPolicy: { ...sourceMapPolicy, previewEnabled: false },
+  });
+  await expect(
+    resolveGitlabContext(service, jwt, ciProject),
+  ).resolves.toMatchObject({
+    sourceMaps: { enabled: false, reason: "preview_disabled" },
+  });
+  await expect(authorizeGitlab(service, jwt, ciProject)).rejects.toMatchObject({
+    status: 403,
+  });
+  await expect(
+    authorizeGitlab(service, jwt, ciProject, "release"),
+  ).resolves.toHaveProperty("release", `account@${ciSha}`);
+
+  activeProject.mockResolvedValue({
+    id: ciProject,
+    sourceMapPolicy: { ...sourceMapPolicy, trustedSources: [] },
+  });
+  await expect(resolveGitlabContext(service, jwt, ciProject)).resolves.toEqual({
+    version: 2,
+    sourceMaps: { enabled: false, reason: "source_not_allowed" },
+  });
+  await expect(
+    authorizeGitlab(service, jwt, ciProject, "release"),
+  ).rejects.toMatchObject({ status: 403 });
 });
 
 it("parses skip responses in the CLI but never converts transport errors or unknown contracts to skip", async () => {

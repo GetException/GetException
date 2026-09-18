@@ -129,7 +129,7 @@ Account захватывает stdout/stderr с ограничением раз�
 
 - RS256, закреплённый issuer/kid, единственный audience, exp/iat/nbf, jti/sub, срок до часа.
 - Точные GitLab project ID/path источника; согласованную пару job project ID/path, когда GitLab её предоставляет. Форк допускается только для MR, в своём или основном проекте, с разрешением Owner. Неполная пара execution claims отвергается.
-- SHA и привязка `.gitlab-ci.yml` к source repo/ref. Исключение GitLab для fork MR в основном проекте: оба config claims могут быть null, если подписаны точные job project ID/path основного проекта. Отсутствие execution claims вместе с null config, частичные null, внешний config и несовпадающий SHA отвергаются. Merged-result pipelines отдельно не поддерживаются.
+- SHA и привязка `.gitlab-ci.yml` к source repo/ref. Для fork MR в основном проекте поддерживаются два формата: оба config claims равны null либо ссылка на `.gitlab-ci.yml` основного проекта с тем же source ref и SHA (GitLab 19.3.2). Оба требуют явных подписанных job project ID/path основного проекта. Без этой execution-пары ссылка на основной проект и null config запрещены; частичные null, чужой host/path/ref, внешний config и несовпадающий SHA отвергаются. Merged-result pipelines отдельно не поддерживаются.
 - Только ожидаемые environments и pipeline sources; MR никогда не получает production.
 - Каждая операция begin/PUT/finalize/status ограничена release и префиксом текущего job, включая retry и старые upload IDs.
 - Регистрация окружения/номера MR совпадает с контекстом сервера. Номер MR из `review/pr-N` — подписанная метка job, но автор MR может менять свой YAML; это не доказательство успешного review или deploy.
