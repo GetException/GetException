@@ -11,6 +11,19 @@ export const ciAudience = "https://monitor.example.test";
 
 export const ciRepository = "company/frontend/account";
 
+export const ciFork = {
+  repositoryId: 321,
+  repositoryPath: "developer/account",
+};
+
+export const ciForkClaims = {
+  project_id: String(ciFork.repositoryId),
+  project_path: ciFork.repositoryPath,
+  job_project_id: String(ciFork.repositoryId),
+  job_project_path: ciFork.repositoryPath,
+  ci_config_ref_uri: `gitlab.example.test/${ciFork.repositoryPath}//.gitlab-ci.yml@refs/heads/feature`,
+};
+
 export function gitlabFixture(projectId = ciProject) {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,

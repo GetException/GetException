@@ -6,6 +6,8 @@ import { getRuntime } from "../../../../../server/runtime";
 import { EditProjectForm } from "../../../../../components/projects/EditProjectForm";
 import { DeleteProjectForm } from "../../../../../components/projects/DeleteProjectForm";
 import { SourceMapTokens } from "../../../../../components/projects/SourceMapTokens";
+import { SourceMapPolicyForm } from "../../../../../components/projects/SourceMapPolicyForm";
+import { sourceMapSettings } from "../../../../../server/source-maps/policy";
 
 export default async function ProjectSettingsPage({
   params,
@@ -33,6 +35,8 @@ export default async function ProjectSettingsPage({
     notFound();
   }
 
+  const maps = await sourceMapSettings(getRuntime().service, id);
+
   return (
     <div className="page narrow">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
@@ -58,7 +62,20 @@ export default async function ProjectSettingsPage({
           }}
         />
       </section>
+      {maps ? (
+        <SourceMapPolicyForm projectId={id} settings={maps} />
+      ) : (
+        <section className="panel form-panel" id="source-maps">
+          <h2>Source maps</h2>
+          <p className="muted">
+            GitLab build authentication has not been configured for this
+            project. Ask your server operator to connect the main repository
+            before allowing preview maps.
+          </p>
+        </section>
+      )}
       <SourceMapTokens
+        gitlabManaged={Boolean(maps)}
         projectId={id}
         tokens={project.sourceMapTokens.map((token) => ({
           ...token,

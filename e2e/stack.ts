@@ -24,7 +24,7 @@ async function port() {
   return address.port;
 }
 
-export async function startStack() {
+export async function startStack(gitlabTrust = "") {
   const caddy = process.env.CADDY_BINARY ?? resolve(".artifacts/tools/caddy");
 
   if (!existsSync(caddy)) {
@@ -61,6 +61,7 @@ export async function startStack() {
     TOTP_ENCRYPTION_KEY: token(),
     AUTH_RATE_KEY: token(),
     MAIL_ENCRYPTION_KEY: token(),
+    GITLAB_CI_TRUST: gitlabTrust,
   };
 
   function launch(args: string[], vars: Record<string, string>) {

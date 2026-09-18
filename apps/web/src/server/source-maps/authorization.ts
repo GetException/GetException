@@ -5,33 +5,70 @@ import type {
 import type { AuthService } from "../auth-service";
 import { AuthError } from "../auth-error";
 import { digest } from "../crypto";
-import { authorizeGitlab } from "./gitlab";
+import { authorizeGitlab, resolveGitlabContext } from "./gitlab";
+import { gitlabBinding } from "./policy";
 
 export type UploadPrincipal =
   { kind: "token" } | { kind: "gitlab"; context: BuildContext };
+
+function gitlabIdentity(headers: Headers) {
+  if (headers.has("origin")) {
+    throw new AuthError(403);
+  }
+
+  return /^GitLab ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(
+    headers.get("authorization") ?? "",
+  )?.[1];
+}
+
+export async function authorizeCiContext(
+  service: AuthService,
+  headers: Headers,
+  projectId: string,
+) {
+  const jwt = gitlabIdentity(headers);
+
+  try {
+    if (!jwt) {
+      throw new AuthError(401);
+    }
+
+    return await resolveGitlabContext(service, jwt, projectId);
+  } catch {
+    await service.rateLimit(
+      headers.get("x-real-ip") ?? "unknown",
+      projectId,
+      "source_map_auth",
+    );
+
+    throw new AuthError(401);
+  }
+}
 
 export async function authorizeUpload(
   service: AuthService,
   headers: Headers,
   projectId: string,
+  operation: "maps" | "release" = "maps",
 ): Promise<UploadPrincipal> {
   if (headers.has("origin")) {
     throw new AuthError(403);
   }
 
   const authorization = headers.get("authorization") ?? "";
-  const identity =
-    /^GitLab ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(
-      authorization,
-    );
+  const identity = gitlabIdentity(headers);
 
   if (identity) {
     try {
       return {
         kind: "gitlab",
-        context: await authorizeGitlab(service, identity[1]!, projectId),
+        context: await authorizeGitlab(service, identity, projectId, operation),
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof AuthError && error.status === 403) {
+        throw error;
+      }
+
       await service.rateLimit(
         headers.get("x-real-ip") ?? "unknown",
         projectId,
@@ -46,6 +83,11 @@ export async function authorizeUpload(
 
   if (!match) {
     throw new AuthError(401);
+  }
+
+  // A permanent token cannot prove its environment and must not bypass the CI policy.
+  if (gitlabBinding(service, projectId)) {
+    throw new AuthError(403);
   }
 
   const credential = await service.db.sourceMapToken.findFirst({

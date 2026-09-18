@@ -95,6 +95,14 @@ export async function safeRoute(fn: () => Promise<Response>) {
           : 503;
 
     const reasons: Record<string, string> = {
+      source_map_policy_invalid:
+        "Check the project IDs and repository paths. Each fork must appear once; at most 20 forks are allowed.",
+      source_map_ci_unconfigured:
+        "GitLab build authentication is not configured for this project.",
+      source_map_primary_repository:
+        "The main repository is already included. Add only additional forks.",
+      source_map_gitlab_managed:
+        "This project uses GitLab build authentication. Permanent upload tokens are disabled.",
       mail_disabled:
         "Invitations are unavailable while email delivery is disabled. Contact your server administrator.",
       member_exists:

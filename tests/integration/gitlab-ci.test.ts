@@ -11,10 +11,17 @@ import {
   ciAudience,
   ciSha,
   ciRepository,
+  ciFork,
+  ciForkClaims,
 } from "../helpers/gitlab-ci";
 import { createRuntime } from "../../apps/web/src/server/runtime";
 import { token } from "../../apps/web/src/server/crypto";
-import { authorizeGitlab } from "../../apps/web/src/server/source-maps/gitlab";
+import {
+  authorizeGitlab,
+  resolveGitlabContext,
+} from "../../apps/web/src/server/source-maps/gitlab";
+import { gitlabBinding } from "../../apps/web/src/server/source-maps/policy";
+import { digest } from "../../apps/web/src/server/crypto";
 import {
   beginUpload,
   uploadArtifact,
@@ -68,7 +75,15 @@ beforeAll(async () => {
     },
     web,
   ).service;
-  jwt = await fixture.sign();
+  await web.sourceMapPolicy.create({
+    data: {
+      projectId,
+      bindingKey: gitlabBinding(service, projectId)!.key,
+      previewEnabled: true,
+      trustedSources: [ciFork],
+    },
+  });
+  jwt = await fixture.sign(ciForkClaims);
   headers = new Headers({
     authorization: `GitLab ${jwt}`,
     "x-real-ip": "test",
@@ -80,7 +95,7 @@ afterAll(async () => {
   await instance?.cleanup();
 });
 
-it("prepares, uploads and resolves a real MR map using only its signed identity", async () => {
+it("prepares, uploads and resolves a fork MR map using only its signed identity", async () => {
   const context = await authorizeGitlab(service, jwt, projectId);
   const dist = join(instance.directory, "dist");
 
@@ -349,4 +364,120 @@ it("rejects an expired identity and immediately disabled trust without changing 
   expect(
     await uploadStatus(service, headers, projectId, receipt.uploadId),
   ).toMatchObject({ status: "ready" });
+});
+
+it("revokes existing fork upload operations when preview is disabled, without disabling release registration or production", async () => {
+  await web.sourceMapPolicy.update({
+    where: { projectId },
+    data: { previewEnabled: false },
+  });
+
+  try {
+    expect(await resolveGitlabContext(service, jwt, projectId)).toMatchObject({
+      sourceMaps: { enabled: false, reason: "preview_disabled" },
+    });
+    await expect(
+      beginUpload(service, headers, projectId, manifest, store),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      uploadStatus(service, headers, projectId, receipt.uploadId),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      finishUpload(service, headers, projectId, receipt.uploadId),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      uploadArtifact(
+        service,
+        new Request(ciAudience, { method: "PUT", headers, body: "{}" }),
+        projectId,
+        receipt.uploadId,
+        receipt.artifacts[0]!.id,
+        store,
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    const context = await authorizeGitlab(service, jwt, projectId, "release");
+
+    await expect(
+      registerRelease(service, headers, projectId, {
+        release: context.release,
+        deployment: context.deployment,
+      }),
+    ).resolves.toHaveProperty("id");
+    await expect(
+      authorizeGitlab(
+        service,
+        await fixture.sign({
+          environment: "production/app",
+          pipeline_source: "push",
+          ref_protected: "true",
+          ref: "stable",
+          ref_path: "refs/heads/stable",
+          ci_config_ref_uri: `gitlab.example.test/${ciRepository}//.gitlab-ci.yml@refs/heads/stable`,
+        }),
+        projectId,
+      ),
+    ).resolves.toHaveProperty("deployment.environment", "production");
+    expect(
+      (
+        await worker.sourceMapUpload.findUniqueOrThrow({
+          where: { id: receipt.uploadId },
+        })
+      ).status,
+    ).toBe("ready");
+  } finally {
+    await web.sourceMapPolicy.update({
+      where: { projectId },
+      data: { previewEnabled: true },
+    });
+  }
+});
+
+it("does not grant an unlisted fork release metadata or permit a permanent token to bypass policy", async () => {
+  await web.sourceMapPolicy.update({
+    where: { projectId },
+    data: { trustedSources: [] },
+  });
+  const secret = token();
+
+  await web.sourceMapToken.create({
+    data: {
+      projectId,
+      name: "Old trusted CI",
+      tokenHash: digest(secret),
+      expiresAt: new Date(Date.now() + 60_000),
+    },
+  });
+
+  try {
+    expect(await resolveGitlabContext(service, jwt, projectId)).toEqual({
+      version: 2,
+      sourceMaps: { enabled: false, reason: "source_not_allowed" },
+    });
+    await expect(
+      uploadStatus(service, headers, projectId, receipt.uploadId),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      registerRelease(service, headers, projectId, {
+        release: manifest.release,
+        deployment: {
+          environment: "staging",
+          review: { provider: "gitlab", repositoryId: 123, number: 554 },
+        },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      beginUpload(
+        service,
+        new Headers({ authorization: `Bearer ${secret}` }),
+        projectId,
+        manifest,
+        store,
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+  } finally {
+    await web.sourceMapPolicy.update({
+      where: { projectId },
+      data: { trustedSources: [ciFork] },
+    });
+  }
 });

@@ -5,11 +5,12 @@ import { unlink } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
 import { totp } from "../apps/web/src/server/crypto";
 import { startStack } from "./stack";
+import { gitlabFixture, ciProject, ciFork } from "../tests/helpers/gitlab-ci";
 
 let stack: Awaited<ReturnType<typeof startStack>>;
 
 test.beforeAll(async () => {
-  stack = await startStack();
+  stack = await startStack(JSON.stringify(gitlabFixture().policy));
 });
 test.afterAll(async () => {
   await stack?.cleanup();
@@ -54,7 +55,7 @@ test("protected setup → SDK capture → workspace navigation → investigation
       .getByLabel("Authenticator code")
       .fill(totp(secret, BigInt(Math.floor(Date.now() / 30_000))));
     const loginResponse = page.waitForResponse((response) =>
-      response.url().endsWith("/api/auth/owner/login"),
+      response.url().endsWith("/api/auth/login"),
     );
 
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -465,7 +466,9 @@ test("protected setup → SDK capture → workspace navigation → investigation
       await expect(
         dashboard.getByRole("heading", { name: "Releases." }),
       ).toBeVisible();
-      await dashboard.getByRole("link", { name: /browser-fixture@/ }).click();
+      await dashboard
+        .getByRole("link", { name: "01234567 Browser checkout", exact: true })
+        .click();
       await expect(
         dashboard.getByRole("heading", { name: /01234567/ }),
       ).toBeVisible();
@@ -481,6 +484,9 @@ test("protected setup → SDK capture → workspace navigation → investigation
       await navigation
         .getByRole("link", { name: "Projects", exact: true })
         .click();
+      await expect(
+        dashboard.getByRole("heading", { name: "Projects." }),
+      ).toBeVisible();
       await dashboard.getByRole("link", { name: /Browser checkout/ }).click();
       await expect(
         dashboard.getByRole("heading", { name: "Project details" }),
@@ -520,6 +526,85 @@ test("protected setup → SDK capture → workspace navigation → investigation
       await expect(
         dashboard.getByRole("heading", { name: "Confirm your identity" }),
       ).toBeVisible();
+      const workspace =
+        await stack.database.admin.organization.findFirstOrThrow();
+
+      await stack.database.admin.project.create({
+        data: {
+          id: ciProject,
+          organizationId: workspace.id,
+          name: "Account CI",
+          slug: "account-ci",
+        },
+      });
+      await dashboard.goto(
+        `${stack.origin}/projects/${ciProject}/settings#source-maps`,
+      );
+      await expect(dashboard.getByLabel("Source map delivery")).toHaveValue(
+        "production",
+      );
+      await expect(
+        dashboard.getByRole("button", { name: "Create upload token" }),
+      ).toHaveCount(0);
+      await dashboard.getByLabel("Source map delivery").selectOption("preview");
+      await dashboard.getByRole("button", { name: "Add fork" }).click();
+      await dashboard
+        .getByLabel("GitLab project ID")
+        .fill(String(ciFork.repositoryId));
+      await dashboard.getByLabel("Repository path").fill(ciFork.repositoryPath);
+      await dashboard
+        .getByRole("button", { name: "Save source map settings" })
+        .click();
+      await expect(dashboard.getByRole("status")).toContainText(
+        "Source map settings saved",
+      );
+      await dashboard.reload();
+      await expect(dashboard.getByLabel("Source map delivery")).toHaveValue(
+        "preview",
+      );
+      await expect(dashboard.getByLabel("Repository path")).toHaveValue(
+        ciFork.repositoryPath,
+      );
+      await dashboard
+        .locator("#source-maps")
+        .screenshot({ path: info.outputPath("source-map-settings.png") });
+      await dashboard.setViewportSize({ width: 390, height: 844 });
+      expect(
+        await dashboard.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+      await dashboard.locator("#source-maps").screenshot({
+        path: info.outputPath("source-map-settings-mobile.png"),
+      });
+      await dashboard
+        .getByLabel("Source map delivery")
+        .selectOption("production");
+      await dashboard
+        .getByRole("button", { name: "Save source map settings" })
+        .click();
+      await expect(dashboard.getByRole("status")).toContainText(
+        "Source map settings saved",
+      );
+      await dashboard.reload();
+      await expect(dashboard.getByLabel("Source map delivery")).toHaveValue(
+        "production",
+      );
+      await expect(dashboard.getByLabel("Repository path")).toHaveValue(
+        ciFork.repositoryPath,
+      );
+      await dashboard.getByRole("button", { name: "Remove fork 1" }).click();
+      await dashboard
+        .getByRole("button", { name: "Save source map settings" })
+        .click();
+      await expect(dashboard.getByRole("status")).toContainText(
+        "Source map settings saved",
+      );
+      expect(
+        await stack.database.admin.sourceMapPolicy.findUniqueOrThrow({
+          where: { projectId: ciProject },
+        }),
+      ).toMatchObject({ previewEnabled: false, trustedSources: [] });
       await dashboard.goto(issueUrl);
       await dashboard.setViewportSize({ width: 390, height: 844 });
       await expect(

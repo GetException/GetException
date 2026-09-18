@@ -1,4 +1,4 @@
-import { buildContextSchema } from "@getexception/protocol";
+import { ciContextSchema } from "@getexception/protocol";
 import { projectApi } from "./api";
 import type { CiCredential } from "./credentials";
 
@@ -8,7 +8,12 @@ export async function buildContext(
   credential: CiCredential,
   transport: typeof fetch = fetch,
 ) {
-  return buildContextSchema.parse(
-    await projectApi(address, project, credential, transport)("/ci", "POST"),
+  return ciContextSchema.parse(
+    await projectApi(
+      address,
+      project,
+      credential,
+      transport,
+    )("/ci?version=2", "POST"),
   );
 }

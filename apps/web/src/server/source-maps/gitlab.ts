@@ -1,9 +1,15 @@
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { z } from "zod";
 import { parseGitlabTrust } from "@getexception/config";
-import { buildContextSchema, type BuildContext } from "@getexception/protocol";
+import {
+  buildContextSchema,
+  ciContextSchema,
+  type BuildContext,
+  type CiContext,
+} from "@getexception/protocol";
 import type { AuthService } from "../auth-service";
 import { AuthError } from "../auth-error";
+import { effectiveSourceMapPolicy, gitlabBinding } from "./policy";
 
 const identifier = z
   .union([
@@ -13,7 +19,10 @@ const identifier = z
   .transform(String);
 const claimsSchema = z.object({
   project_id: identifier,
-  project_path: z.string(),
+  project_path: z
+    .string()
+    .max(255)
+    .regex(/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/),
   job_project_id: identifier.optional(),
   job_project_path: z.string().optional(),
   job_id: identifier,
@@ -25,8 +34,11 @@ const claimsSchema = z.object({
   ref_path: z.string().min(1).max(270),
   ref_protected: z.union([z.boolean(), z.enum(["true", "false"])]),
   environment: z.string().min(1).max(255),
-  ci_config_ref_uri: z.string().max(1024),
-  ci_config_sha: z.string().regex(/^[a-f0-9]{40}$/),
+  ci_config_ref_uri: z.string().max(1024).nullable(),
+  ci_config_sha: z
+    .string()
+    .regex(/^[a-f0-9]{40}$/)
+    .nullable(),
 });
 const verifiers = new WeakMap<
   AuthService,
@@ -41,7 +53,29 @@ export async function authorizeGitlab(
   service: AuthService,
   jwt: string,
   projectId: string,
+  operation: "maps" | "release" = "maps",
 ): Promise<BuildContext> {
+  const context = await resolveGitlabContext(service, jwt, projectId);
+
+  if (
+    !("release" in context) ||
+    (operation === "maps" && !context.sourceMaps.enabled)
+  ) {
+    throw new AuthError(403);
+  }
+
+  return buildContextSchema.parse({
+    release: context.release,
+    assetPrefix: context.assetPrefix,
+    deployment: context.deployment,
+  });
+}
+
+export async function resolveGitlabContext(
+  service: AuthService,
+  jwt: string,
+  projectId: string,
+): Promise<CiContext> {
   try {
     const raw = service.config.GITLAB_CI_TRUST;
 
@@ -94,20 +128,40 @@ export async function authorizeGitlab(
 
     const claims = claimsSchema.parse(payload);
     const expectedRef = `refs/${claims.ref_type === "branch" ? "heads" : "tags"}/${claims.ref}`;
-    const configRef = `${new URL(trust.issuer).host}/${binding.repositoryPath}//.gitlab-ci.yml@${expectedRef}`;
+    const configRef = `${new URL(trust.issuer).host}/${claims.project_path}//.gitlab-ci.yml@${expectedRef}`;
+    const primary =
+      claims.project_id === String(binding.repositoryId) &&
+      claims.project_path === binding.repositoryPath;
+    const jobClaimsPresent =
+      claims.job_project_id !== undefined ||
+      claims.job_project_path !== undefined;
+    const jobInSource =
+      claims.job_project_id === claims.project_id &&
+      claims.job_project_path === claims.project_path;
+    const jobInPrimary =
+      claims.job_project_id === String(binding.repositoryId) &&
+      claims.job_project_path === binding.repositoryPath;
+    const forkInPrimary =
+      !primary &&
+      claims.pipeline_source === "merge_request_event" &&
+      jobInPrimary;
+    const sourceConfig =
+      claims.ci_config_sha === claims.sha &&
+      [configRef, `https://${configRef}`, `http://${configRef}`].includes(
+        claims.ci_config_ref_uri ?? "",
+      );
+    // GitLab omits both config claims for a fork MR executed in the parent project.
+    const parentConfig =
+      forkInPrimary &&
+      claims.ci_config_ref_uri === null &&
+      claims.ci_config_sha === null;
 
     if (
-      claims.project_id !== String(binding.repositoryId) ||
-      claims.project_path !== binding.repositoryPath ||
-      (claims.job_project_id !== undefined &&
-        claims.job_project_id !== claims.project_id) ||
-      (claims.job_project_path !== undefined &&
-        claims.job_project_path !== claims.project_path) ||
+      (claims.project_id === String(binding.repositoryId)) !==
+        (claims.project_path === binding.repositoryPath) ||
+      (jobClaimsPresent && !jobInSource && !forkInPrimary) ||
       claims.ref_path !== expectedRef ||
-      claims.ci_config_sha !== claims.sha ||
-      ![configRef, `https://${configRef}`, `http://${configRef}`].includes(
-        claims.ci_config_ref_uri,
-      )
+      (!sourceConfig && !parentConfig)
     ) {
       throw new Error("Mismatched build identity");
     }
@@ -119,6 +173,7 @@ export async function authorizeGitlab(
 
     if (production) {
       if (
+        !primary ||
         claims.pipeline_source === "merge_request_event" ||
         ![true, "true"].includes(claims.ref_protected) ||
         !binding.productionRefs.some((ref) =>
@@ -129,17 +184,40 @@ export async function authorizeGitlab(
       ) {
         throw new Error("Production build is not trusted");
       }
-    } else if (!preview || claims.ref_type !== "branch") {
+    } else if (
+      !preview ||
+      claims.ref_type !== "branch" ||
+      (!primary && claims.pipeline_source !== "merge_request_event")
+    ) {
       throw new Error("Unknown build environment");
     }
 
     const project = await service.db.project.findFirst({
       where: { id: projectId, enabled: true, deletedAt: null },
-      select: { id: true },
+      select: { id: true, sourceMapPolicy: true },
     });
 
     if (!project) {
       throw new Error("Inactive build project");
+    }
+
+    const policy = effectiveSourceMapPolicy(
+      project.sourceMapPolicy,
+      gitlabBinding(service, projectId)!.key,
+    );
+    const allowedSource =
+      primary ||
+      policy.trustedSources.some(
+        (source) =>
+          String(source.repositoryId) === claims.project_id &&
+          source.repositoryPath === claims.project_path,
+      );
+
+    if (!allowedSource) {
+      return {
+        version: 2,
+        sourceMaps: { enabled: false, reason: "source_not_allowed" },
+      };
     }
 
     const review =
@@ -149,7 +227,12 @@ export async function authorizeGitlab(
           )
         : null;
 
-    return buildContextSchema.parse({
+    return ciContextSchema.parse({
+      version: 2,
+      sourceMaps:
+        production || policy.previewEnabled
+          ? { enabled: true }
+          : { enabled: false, reason: "preview_disabled" },
       release: `${binding.releasePrefix}@${claims.sha}`,
       assetPrefix: `assets/ge-gl-${binding.repositoryId}-${claims.job_id}/`,
       deployment: {

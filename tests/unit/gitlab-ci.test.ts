@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { parseGitlabTrust } from "@getexception/config";
-import { authorizeGitlab } from "../../apps/web/src/server/source-maps/gitlab";
+import {
+  authorizeGitlab,
+  resolveGitlabContext,
+} from "../../apps/web/src/server/source-maps/gitlab";
+import { gitlabBinding } from "../../apps/web/src/server/source-maps/policy";
 import {
   assertReleaseScope,
   assertUploadScope,
@@ -12,6 +16,8 @@ import {
   ciSha,
   ciAudience,
   ciRepository,
+  ciFork,
+  ciForkClaims,
 } from "../helpers/gitlab-ci";
 import {
   authorizationHeader,
@@ -29,9 +35,17 @@ const service = {
   db: { project: { findFirst: activeProject } },
 } as unknown as AuthService;
 
+const sourceMapPolicy = {
+  bindingKey: gitlabBinding(service, ciProject)!.key,
+  previewEnabled: true,
+  trustedSources: [ciFork],
+};
+
+activeProject.mockResolvedValue({ id: ciProject, sourceMapPolicy });
+
 afterEach(() => {
   vi.unstubAllGlobals();
-  activeProject.mockResolvedValue({ id: ciProject });
+  activeProject.mockResolvedValue({ id: ciProject, sourceMapPolicy });
 });
 
 it("verifies a real GitLab signature locally and binds its exact build without network access", async () => {
@@ -228,6 +242,14 @@ it("accepts older GitLab claims and literal proxy issuers, and revokes trust wit
       }),
     },
   } as AuthService;
+
+  activeProject.mockResolvedValue({
+    id: ciProject,
+    sourceMapPolicy: {
+      ...sourceMapPolicy,
+      bindingKey: gitlabBinding(localService, ciProject)!.key,
+    },
+  });
   const jwt = await fixture.sign({
     iss: "http://gitlab.example.test",
     job_project_id: undefined,
@@ -253,7 +275,7 @@ it("accepts older GitLab claims and literal proxy issuers, and revokes trust wit
 
 it("keeps CLI identity in the authorization header, requires HTTPS and rejects mixed credentials", async () => {
   const jwt = await fixture.sign();
-  const context = await authorizeGitlab(service, jwt, ciProject);
+  const context = await resolveGitlabContext(service, jwt, ciProject);
   const transport = vi
     .fn<typeof fetch>()
     .mockResolvedValue(Response.json(context));
@@ -279,7 +301,7 @@ it("keeps CLI identity in the authorization header, requires HTTPS and rejects m
     ),
   ).toEqual(context);
   expect(transport).toHaveBeenCalledWith(
-    `${ciAudience}/api/v1/projects/${ciProject}/ci`,
+    `${ciAudience}/api/v1/projects/${ciProject}/ci?version=2`,
     expect.objectContaining({
       method: "POST",
       credentials: "omit",
@@ -298,4 +320,151 @@ it("keeps CLI identity in the authorization header, requires HTTPS and rejects m
       transport,
     ),
   ).rejects.toThrow();
+});
+
+it("allows a trusted fork both in its own project and in the parent without granting production", async () => {
+  for (const claims of [
+    ciForkClaims,
+    {
+      ...ciForkClaims,
+      job_project_id: "123",
+      job_project_path: ciRepository,
+      ci_config_ref_uri: null,
+      ci_config_sha: null,
+    },
+    { ...ciForkClaims, job_project_id: undefined, job_project_path: undefined },
+  ]) {
+    const context = await resolveGitlabContext(
+      service,
+      await fixture.sign(claims),
+      ciProject,
+    );
+
+    expect(context).toMatchObject({
+      version: 2,
+      sourceMaps: { enabled: true },
+      release: `account@${ciSha}`,
+      assetPrefix: "assets/ge-gl-123-456/",
+      deployment: {
+        environment: "staging",
+        review: { repositoryId: 123, number: 554 },
+      },
+    });
+  }
+
+  for (const changes of [
+    {
+      environment: "production/app",
+      pipeline_source: "push",
+      ref_protected: "true",
+    },
+    { pipeline_source: "push" },
+    { job_project_id: "999", job_project_path: "attacker/account" },
+    { job_project_path: undefined },
+    { ci_config_ref_uri: null, ci_config_sha: null },
+    {
+      job_project_id: "123",
+      job_project_path: ciRepository,
+      ci_config_ref_uri: null,
+    },
+    {
+      job_project_id: "123",
+      job_project_path: ciRepository,
+      ci_config_sha: null,
+    },
+    {
+      ci_config_ref_uri: `gitlab.example.test/${ciRepository}//.gitlab-ci.yml@refs/heads/feature`,
+    },
+  ]) {
+    await expect(
+      resolveGitlabContext(
+        service,
+        await fixture.sign({ ...ciForkClaims, ...changes }),
+        ciProject,
+      ),
+    ).rejects.toMatchObject({ status: 401 });
+  }
+});
+
+it("returns explicit disabled policy decisions without granting upload and preserves trusted release registration", async () => {
+  const jwt = await fixture.sign(ciForkClaims);
+
+  activeProject.mockResolvedValue({
+    id: ciProject,
+    sourceMapPolicy: { ...sourceMapPolicy, previewEnabled: false },
+  });
+  expect(await resolveGitlabContext(service, jwt, ciProject)).toMatchObject({
+    version: 2,
+    release: `account@${ciSha}`,
+    sourceMaps: { enabled: false, reason: "preview_disabled" },
+  });
+  await expect(authorizeGitlab(service, jwt, ciProject)).rejects.toMatchObject({
+    status: 403,
+  });
+  await expect(
+    authorizeGitlab(service, jwt, ciProject, "release"),
+  ).resolves.toHaveProperty("release", `account@${ciSha}`);
+
+  activeProject.mockResolvedValue({
+    id: ciProject,
+    sourceMapPolicy: { ...sourceMapPolicy, trustedSources: [] },
+  });
+  expect(await resolveGitlabContext(service, jwt, ciProject)).toEqual({
+    version: 2,
+    sourceMaps: { enabled: false, reason: "source_not_allowed" },
+  });
+  await expect(
+    authorizeGitlab(service, jwt, ciProject, "release"),
+  ).rejects.toMatchObject({ status: 403 });
+
+  for (const stored of [
+    null,
+    { ...sourceMapPolicy, bindingKey: "b".repeat(64) },
+  ]) {
+    activeProject.mockResolvedValue({ id: ciProject, sourceMapPolicy: stored });
+    expect(
+      await resolveGitlabContext(service, await fixture.sign(), ciProject),
+    ).toMatchObject({
+      sourceMaps: { enabled: false, reason: "preview_disabled" },
+    });
+    expect(await resolveGitlabContext(service, jwt, ciProject)).toMatchObject({
+      sourceMaps: { enabled: false, reason: "source_not_allowed" },
+    });
+  }
+});
+
+it("parses skip responses in the CLI but never converts transport errors or unknown contracts to skip", async () => {
+  const credential = { gitlabIdToken: await fixture.sign() };
+  const skipped = {
+    version: 2,
+    sourceMaps: { enabled: false, reason: "source_not_allowed" },
+  };
+
+  await expect(
+    buildContext(ciAudience, ciProject, credential, async () =>
+      Response.json(skipped),
+    ),
+  ).resolves.toEqual(skipped);
+
+  for (const response of [
+    Response.json(skipped, { status: 401 }),
+    Response.json(skipped, { status: 503 }),
+    Response.json({
+      version: 2,
+      sourceMaps: { enabled: false, reason: "unknown" },
+    }),
+    Response.json({ ...skipped, extra: true }),
+    Response.json({ sourceMaps: false }),
+    Response.json({
+      version: 2,
+      sourceMaps: { enabled: false, reason: "preview_disabled" },
+      release: `account@${ciSha}`,
+      assetPrefix: "assets/ge-gl-123-456/",
+      deployment: { environment: "production" },
+    }),
+  ]) {
+    await expect(
+      buildContext(ciAudience, ciProject, credential, async () => response),
+    ).rejects.toThrow();
+  }
 });

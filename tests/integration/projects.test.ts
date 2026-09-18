@@ -17,6 +17,10 @@ import { digest, token, totp } from "../../apps/web/src/server/crypto";
 import { createIngestServer } from "../../apps/ingest/src/server";
 import { POST as CREATE_MAP_TOKEN } from "../../apps/web/src/app/api/dashboard/projects/[id]/source-map-tokens/route";
 import { DELETE as REVOKE_MAP_TOKEN } from "../../apps/web/src/app/api/dashboard/projects/[id]/source-map-tokens/[tokenId]/route";
+import { PATCH as SAVE_MAP_POLICY } from "../../apps/web/src/app/api/dashboard/projects/[id]/source-map-policy/route";
+import { POST as CI_CONTEXT } from "../../apps/web/src/app/api/v1/projects/[id]/ci/route";
+import { sourceMapSettings } from "../../apps/web/src/server/source-maps/policy";
+import { gitlabFixture, ciFork, ciForkClaims } from "../helpers/gitlab-ci";
 
 let database: Awaited<ReturnType<typeof temporaryDatabase>>;
 let web: ReturnType<typeof createDatabase>;
@@ -445,6 +449,200 @@ it("creates a hashed, revocable source-map credential only with Owner MFA", asyn
         .status,
     ).toBe(428);
   } finally {
+    await database.admin.session.updateMany({
+      data: { mfaVerifiedAt: verified.mfaVerifiedAt },
+    });
+  }
+});
+
+it("saves preview permissions only for an Owner with CSRF and fresh MFA, and returns explicit CI decisions", async () => {
+  const { id } = await (await create(["https://policy.example.test"])).json();
+  const fixture = gitlabFixture(id);
+  const priorTrust = runtime.service.config.GITLAB_CI_TRUST;
+  const member = await web.member.findFirstOrThrow({
+    where: { role: "owner" },
+  });
+  const verified = await database.admin.session.findFirstOrThrow();
+  const value = { previewEnabled: true, trustedSources: [ciFork] };
+  const save = (body: unknown = value, extra = {}, projectId = id) =>
+    SAVE_MAP_POLICY(
+      new Request(
+        `${dashboardOrigin}/api/dashboard/projects/${projectId}/source-map-policy`,
+        {
+          method: "PATCH",
+          headers: {
+            Cookie: cookie,
+            Origin: dashboardOrigin,
+            "Content-Type": "application/json",
+            ...extra,
+          },
+          body: JSON.stringify(body),
+        },
+      ),
+      { params: Promise.resolve({ id: projectId }) },
+    );
+  const context = async (changes = {}, extra = {}, query = "?version=2") =>
+    CI_CONTEXT(
+      new Request(`${dashboardOrigin}/api/v1/projects/${id}/ci${query}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `GitLab ${await fixture.sign({ aud: dashboardOrigin, ...ciForkClaims, ...changes })}`,
+          ...extra,
+        },
+      }),
+      { params: Promise.resolve({ id }) },
+    );
+
+  try {
+    expect((await save()).status).toBe(409);
+    runtime.service.config.GITLAB_CI_TRUST = JSON.stringify(fixture.policy);
+    expect(await sourceMapSettings(runtime.service, id)).toMatchObject({
+      previewEnabled: false,
+      trustedSources: [],
+    });
+    expect((await context()).status).toBe(200);
+    expect((await context({}, {}, "?version=3")).status).toBe(400);
+    expect((await context({}, {}, "")).status).toBe(403);
+    expect(await (await context()).json()).toEqual({
+      version: 2,
+      sourceMaps: { enabled: false, reason: "source_not_allowed" },
+    });
+    expect((await context({}, { Origin: dashboardOrigin })).status).toBe(403);
+    expect(
+      (await context({}, { Authorization: "GitLab invalid.token.signature" }))
+        .status,
+    ).toBe(401);
+
+    expect((await save(value, { Cookie: "" })).status).toBe(401);
+    expect(
+      (await save(value, { Origin: "https://other.example.test" })).status,
+    ).toBe(403);
+    expect((await save(value, { "Content-Type": "text/plain" })).status).toBe(
+      403,
+    );
+
+    for (const role of ["developer", "viewer"]) {
+      await database.admin.member.update({
+        where: { id: member.id },
+        data: { role },
+      });
+      expect((await save()).status).toBe(403);
+    }
+
+    await database.admin.member.update({
+      where: { id: member.id },
+      data: { role: "owner" },
+    });
+    await database.admin.session.updateMany({
+      data: { mfaVerifiedAt: new Date(Date.now() - 301_000) },
+    });
+    expect((await save()).status).toBe(428);
+    await database.admin.session.updateMany({
+      data: { mfaVerifiedAt: verified.mfaVerifiedAt },
+    });
+
+    for (const invalid of [
+      { ...value, previewEnabled: "true" },
+      { ...value, productionRefs: ["*"] },
+      { ...value, trustedSources: [ciFork, ciFork] },
+      { ...value, trustedSources: [{ ...ciFork, repositoryId: 0 }] },
+      { ...value, trustedSources: [{ ...ciFork, repositoryPath: "*" }] },
+      {
+        ...value,
+        trustedSources: [
+          {
+            ...ciFork,
+            repositoryPath: "https://gitlab.example.test/developer/account",
+          },
+        ],
+      },
+      {
+        ...value,
+        trustedSources: Array.from({ length: 21 }, (_, index) => ({
+          repositoryId: 1000 + index,
+          repositoryPath: `dev-${index}/account`,
+        })),
+      },
+      {
+        ...value,
+        trustedSources: [
+          { repositoryId: 123, repositoryPath: "company/frontend/account" },
+        ],
+      },
+    ]) {
+      expect((await save(invalid)).status).toBe(400);
+    }
+
+    expect((await save(value, {}, randomUUID())).status).toBe(404);
+    expect(await web.sourceMapPolicy.count({ where: { projectId: id } })).toBe(
+      0,
+    );
+    expect((await save()).status).toBe(200);
+    expect(await sourceMapSettings(runtime.service, id)).toMatchObject(value);
+    const legacy = await (await context({}, {}, "")).json();
+
+    expect(legacy).toHaveProperty("release");
+    expect(legacy).not.toHaveProperty("version");
+    expect(legacy).not.toHaveProperty("sourceMaps");
+    expect(await (await context()).json()).toMatchObject({
+      version: 2,
+      sourceMaps: { enabled: true },
+      deployment: { review: { repositoryId: 123, number: 554 } },
+    });
+    expect(
+      await (
+        await context({
+          job_project_id: "123",
+          job_project_path: "company/frontend/account",
+          ci_config_ref_uri: null,
+          ci_config_sha: null,
+        })
+      ).json(),
+    ).toMatchObject({ sourceMaps: { enabled: true } });
+
+    expect((await save({ ...value, previewEnabled: false })).status).toBe(200);
+    expect((await context({}, {}, "")).status).toBe(403);
+    expect(await (await context()).json()).toMatchObject({
+      sourceMaps: { enabled: false, reason: "preview_disabled" },
+    });
+    expect(await sourceMapSettings(runtime.service, id)).toMatchObject({
+      previewEnabled: false,
+      trustedSources: [ciFork],
+    });
+    expect(
+      (await save({ previewEnabled: true, trustedSources: [] })).status,
+    ).toBe(200);
+    expect(await (await context()).json()).toEqual({
+      version: 2,
+      sourceMaps: { enabled: false, reason: "source_not_allowed" },
+    });
+    expect(
+      await web.auditLog.count({
+        where: {
+          action: "source_map_policy_update",
+          actorId: member.userId,
+          success: true,
+        },
+      }),
+    ).toBe(3);
+
+    await database.admin.project.update({
+      where: { id },
+      data: { deletedAt: new Date(), enabled: false },
+    });
+    expect((await save()).status).toBe(404);
+    expect((await context()).status).toBe(401);
+    await database.admin.project.delete({ where: { id } });
+    expect(await web.sourceMapPolicy.count({ where: { projectId: id } })).toBe(
+      0,
+    );
+  } finally {
+    runtime.service.config.GITLAB_CI_TRUST = priorTrust;
+    await database.admin.member.update({
+      where: { id: member.id },
+      data: { role: "owner" },
+    });
     await database.admin.session.updateMany({
       data: { mfaVerifiedAt: verified.mfaVerifiedAt },
     });

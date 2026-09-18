@@ -717,6 +717,7 @@ describe("durable inbox and separate SQL roles", () => {
         projectLifecycle,
         diagnostics,
         releaseContext,
+        sourceMapPolicy,
       ] = migrationFiles();
 
       await upgrade.query(initial!);
@@ -814,6 +815,63 @@ describe("durable inbox and separate SQL roles", () => {
         (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
           ?.version,
       ).toBe(6);
+      await upgrade.query(sourceMapPolicy!);
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rowCount,
+      ).toBe(0);
+      await upgrade.query(
+        "INSERT INTO _prisma_migrations(finished_at) VALUES (now())",
+      );
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
+          ?.version,
+      ).toBe(7);
+      expect(
+        (await upgrade.query("SELECT count(*) FROM source_map_policy")).rows[0]
+          ?.count,
+      ).toBe("0");
+      await upgrade.query(
+        'INSERT INTO source_map_policy("projectId", "bindingKey") VALUES ($1, $2)',
+        ["upgrade-project", "a".repeat(64)],
+      );
+      expect(
+        (
+          await upgrade.query(
+            'SELECT "previewEnabled", "trustedSources" FROM source_map_policy',
+          )
+        ).rows,
+      ).toEqual([{ previewEnabled: false, trustedSources: [] }]);
+
+      for (const role of [
+        "getexception_ingest",
+        "getexception_worker",
+        "getexception_mail",
+      ]) {
+        expect(
+          (
+            await upgrade.query(
+              "SELECT has_table_privilege($1, 'source_map_policy', 'SELECT') AS allowed",
+              [role],
+            )
+          ).rows[0]?.allowed,
+        ).toBe(false);
+        expect(
+          (
+            await upgrade.query(
+              "SELECT has_table_privilege($1, 'source_map_policy', 'UPDATE') AS allowed",
+              [role],
+            )
+          ).rows[0]?.allowed,
+        ).toBe(false);
+      }
+
+      expect(
+        (
+          await upgrade.query(
+            "SELECT has_table_privilege('getexception_backup', 'source_map_policy', 'SELECT') AS allowed",
+          )
+        ).rows[0]?.allowed,
+      ).toBe(true);
       expect(
         (
           await upgrade.query(

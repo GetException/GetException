@@ -12,7 +12,12 @@ export async function registerRelease(
   projectId: string,
   value: unknown,
 ) {
-  const principal = await authorizeUpload(service, headers, projectId);
+  const principal = await authorizeUpload(
+    service,
+    headers,
+    projectId,
+    "release",
+  );
   const input = releaseRegistrationSchema.parse(value);
 
   assertReleaseScope(principal, input.release, input.deployment);

@@ -256,6 +256,7 @@ model Project {
   releases Release[]
   stats ProjectDailyStat[]
   sourceMapTokens SourceMapToken[]
+  sourceMapPolicy SourceMapPolicy?
   sourceMapUploads SourceMapUpload[]
   sourceArtifacts SourceArtifact[]
   issueActivities IssueActivity[]
@@ -406,6 +407,14 @@ view RuntimeSchema {
   @@map("runtime_schema")
 }
 
+model SourceMapPolicy {
+  projectId String @id
+  bindingKey String
+  previewEnabled Boolean @default(false)
+  trustedSources Json @default("[]")
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  @@map("source_map_policy")
+}
 model SourceMapToken {
   id String @id @default(uuid())
   projectId String

@@ -3,6 +3,7 @@ import { ownerTransaction } from "../owner-transaction";
 import type { AuthService } from "../auth-service";
 import { AuthError } from "../auth-error";
 import { digest, token } from "../crypto";
+import { gitlabBinding } from "./policy";
 
 export async function createSourceMapToken(
   service: AuthService,
@@ -27,6 +28,10 @@ export async function createSourceMapToken(
 
     if (!project) {
       throw new AuthError(404);
+    }
+
+    if (gitlabBinding(service, projectId)) {
+      throw new AuthError(409, "source_map_gitlab_managed");
     }
 
     if (

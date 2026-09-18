@@ -1736,3 +1736,42 @@ tbody tr:hover {
 .release-environment-tabs {
   margin-bottom: 20px;
 }
+
+.source-map-repository {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  margin: 20px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.preview-sources {
+  display: grid;
+  gap: 16px;
+}
+.preview-sources h3 {
+  margin: 0;
+}
+.preview-source {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr);
+  gap: 16px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.preview-source legend {
+  padding: 0 8px;
+  color: var(--muted);
+}
+.preview-source .button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+@media (max-width: 640px) {
+  .preview-source {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

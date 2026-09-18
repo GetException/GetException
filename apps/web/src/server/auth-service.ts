@@ -45,6 +45,7 @@ export class AuthService {
       | "team_create"
       | "source_map_token_create"
       | "source_map_token_revoke"
+      | "source_map_policy_update"
       | "team_update"
       | "member_update"
       | "invitation_create"

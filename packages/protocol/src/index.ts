@@ -403,4 +403,9 @@ export function encodeEnvelope(event: SafeEvent, sdkVersion?: string): string {
   return `${JSON.stringify({ event_id: event.eventId })}\n${JSON.stringify({ type: "event", length: new TextEncoder().encode(item).length })}\n${item}`;
 }
 
-export { buildContextSchema, type BuildContext } from "./ci";
+export {
+  buildContextSchema,
+  ciContextSchema,
+  type BuildContext,
+  type CiContext,
+} from "./ci";

@@ -11,6 +11,7 @@ export const actions: Record<string, string> = {
   project_delete: "Project scheduled for deletion",
   project_restore: "Project restored",
   project_purge: "Project permanently deleted",
+  source_map_policy_update: "Source map permissions updated",
   issue_resolve: "Issue resolved",
   issue_reopen: "Issue reopened",
   team_create: "Team created",

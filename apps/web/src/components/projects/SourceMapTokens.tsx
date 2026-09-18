@@ -10,8 +10,10 @@ import { dateTime } from "../../lib/format";
 export function SourceMapTokens({
   projectId,
   tokens,
+  gitlabManaged = false,
 }: {
   projectId: string;
+  gitlabManaged?: boolean;
   tokens: {
     id: string;
     name: string;
@@ -23,12 +25,17 @@ export function SourceMapTokens({
   const mutation = useProjectMutation();
   const router = useRouter();
 
+  if (gitlabManaged && !tokens.length) {
+    return null;
+  }
+
   return (
     <section className="panel form-panel">
       <h2>Source map upload tokens</h2>
       <p className="muted">
-        Create a token for your CI to upload source maps for this project.
-        Tokens expire after 90 days.
+        {gitlabManaged
+          ? "GitLab builds use temporary credentials. Permanent upload tokens are not accepted for this project; you can revoke old tokens below."
+          : "Create a token for trusted CI to upload source maps for this project. Tokens expire after 90 days. Never pass these tokens to merge request jobs."}
       </p>
       {secret && (
         <div className="upload-token-notice" role="status">
@@ -36,29 +43,31 @@ export function SourceMapTokens({
           <pre className="mono">{secret}</pre>
         </div>
       )}
-      <Form
-        button="Create upload token"
-        submit={async (data) => {
-          const result = (await mutation.run(
-            `/api/dashboard/projects/${projectId}/source-map-tokens`,
-            { name: String(data.get("name") ?? "") },
-            "POST",
-          )) as { token: string };
+      {!gitlabManaged && (
+        <Form
+          button="Create upload token"
+          submit={async (data) => {
+            const result = (await mutation.run(
+              `/api/dashboard/projects/${projectId}/source-map-tokens`,
+              { name: String(data.get("name") ?? "") },
+              "POST",
+            )) as { token: string };
 
-          setSecret(result.token);
-          router.refresh();
-        }}
-      >
-        <label>
-          Token name
-          <input
-            name="name"
-            required
-            maxLength={80}
-            placeholder="Account preview CI"
-          />
-        </label>
-      </Form>
+            setSecret(result.token);
+            router.refresh();
+          }}
+        >
+          <label>
+            Token name
+            <input
+              name="name"
+              required
+              maxLength={80}
+              placeholder="Trusted production CI"
+            />
+          </label>
+        </Form>
+      )}
       {tokens.map((token) => (
         <div key={token.id} className="upload-token-row">
           <div>
