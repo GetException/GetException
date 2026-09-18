@@ -43,6 +43,10 @@ Owner доверяет preview job источника, а не утвержде�
 
 Использовать сервер и `@getexception/cli` с контрактом `ci context` **version 2**. CLI 0.1.8 поддерживает только предыдущий контракт и требует обновления; 0.1.7 не имеет команды. SDK менять ради авторизации CI не требуется. Сначала выпустить сервер и CLI, затем обновлять интеграцию account. Старый клиент не должен интерпретировать неизвестный ответ как разрешение.
 
+В MR pipeline целевой репозиторий проверять по **`CI_MERGE_REQUEST_PROJECT_ID` и `CI_MERGE_REQUEST_PROJECT_PATH`**. GitLab не предоставляет встроенных `CI_MERGE_REQUEST_TARGET_PROJECT_ID` или `CI_MERGE_REQUEST_TARGET_PROJECT_PATH`; требовать их наличия нельзя. Источник MR описывают `CI_MERGE_REQUEST_SOURCE_PROJECT_ID/PATH`, а место выполнения job — `CI_PROJECT_ID/PATH`. Это три разные роли: для MR из форка source отличается от target, а execution может совпадать с любым из них. Проверять обе части пары ID/path и не подменять отсутствующий target значением source или execution. В тестах использовать реальные имена переменных, включая fork MR без несуществующих TARGET-полей.
+
+Все перечисленные `CI_*` задаёт GitLab: создавать или переопределять их в Settings → CI/CD → Variables не нужно. В реализации [GitLab 19.3.2](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.3.2-ee/app/models/merge_request.rb) MR project — это target project; также см. [справочник переменных](https://docs.gitlab.com/ci/variables/predefined_variables/#predefined-variables-for-merge-request-pipelines). Эти проверки управляющего скрипта дополняют серверную проверку подписанного удостоверения и Owner policy, но не заменяют её.
+
 Новый CLI запрашивает `POST /api/v1/projects/{id}/ci?version=2`. Без этого параметра сервер сохраняет старый ответ из трёх полей только для сборок с разрешёнными картами. Если карты запрещены, старый клиент получает 403, а не неявный skip. Поэтому обновление сервера не ломает разрешённые production-сборки с CLI 0.1.8, но для переключателя и форков account нужен новый CLI. Другие значения version отвергаются.
 
 Добавить **только в app job**:
