@@ -16,6 +16,8 @@ const receiptSchema = z.object({
   ),
 });
 
+const uploadConcurrency = 8;
+
 export async function uploadMaps(
   directory: string,
   address: string,
@@ -37,6 +39,11 @@ export async function uploadMaps(
   }
 
   if (receipt.status === "receiving") {
+    const pending: {
+      entry: (typeof manifest.artifacts)[number];
+      id: string;
+    }[] = [];
+
     for (const entry of manifest.artifacts) {
       const remote = receipt.artifacts.find((item) => item.path === entry.path);
 
@@ -48,10 +55,21 @@ export async function uploadMaps(
         continue;
       }
 
-      await request(
-        `/${receipt.uploadId}/${remote.id}`,
-        "PUT",
-        await readPreparedMap(directory, entry),
+      pending.push({ entry, id: remote.id });
+    }
+
+    for (let start = 0; start < pending.length; start += uploadConcurrency) {
+      const group = pending.slice(start, start + uploadConcurrency);
+
+      // Keep each wave bounded so a failed request stops before more files start.
+      await Promise.all(
+        group.map(async ({ entry, id }) =>
+          request(
+            `/${receipt.uploadId}/${id}`,
+            "PUT",
+            await readPreparedMap(directory, entry),
+          ),
+        ),
       );
     }
 
