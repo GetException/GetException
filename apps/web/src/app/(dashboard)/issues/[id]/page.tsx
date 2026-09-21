@@ -23,6 +23,9 @@ import { IssueStatusButton } from "../../../../components/issues/IssueStatusButt
 import { StackTrace } from "../../../../components/issues/StackTrace";
 import { IssueActivity } from "../../../../components/issues/IssueActivity";
 import { EventDiagnostics } from "../../../../components/issues/EventDiagnostics";
+import { IssueBuildContext } from "../../../../components/issues/IssueBuildContext";
+import { IssueTrend } from "../../../../components/issues/IssueTrend";
+import { issueTrend } from "../../../../server/issues/insights";
 
 export default async function IssuePage({
   params,
@@ -56,7 +59,7 @@ export default async function IssuePage({
   });
   const scope = { issueId: issue.id, projectId: issue.projectId };
   const ordering = [{ receivedAt: "desc" as const }, { id: "desc" as const }];
-  const [selected, events, retained] = await Promise.all([
+  const [selected, events, retained, trend] = await Promise.all([
     db.errorEvent.findFirst({
       where: { ...scope, ...(eventId ? { eventId } : {}) },
       orderBy: ordering,
@@ -77,6 +80,7 @@ export default async function IssuePage({
       },
     }),
     db.errorEvent.count({ where: scope }),
+    issueTrend(db, issue.projectId, issue.id),
   ]);
 
   if (eventId && !selected) {
@@ -115,7 +119,7 @@ export default async function IssuePage({
                   name: selected.release,
                 },
               },
-              select: { id: true },
+              select: { id: true, deployments: true },
             })
           : null,
       ])
@@ -156,21 +160,12 @@ export default async function IssuePage({
             {selected && (
               <>
                 <span className="separator" />
-                <span>{selected.environment}</span>
-                {selected.release && (
-                  <>
-                    <span className="separator" />
-                    {release ? (
-                      <Link className="mono" href={`/releases/${release.id}`}>
-                        ◇ {releaseLabel(selected.release)}
-                      </Link>
-                    ) : (
-                      <span className="mono">
-                        {releaseLabel(selected.release)}
-                      </span>
-                    )}
-                  </>
-                )}
+                <IssueBuildContext
+                  projectId={issue.projectId}
+                  environment={selected.environment}
+                  releaseName={selected.release}
+                  release={release}
+                />
               </>
             )}
           </div>
@@ -224,6 +219,7 @@ export default async function IssuePage({
           )}
         </div>
       </div>
+      <IssueTrend days={trend} />
       <div className="issue-columns">
         <div className="issue-stack-column">
           <StackTrace

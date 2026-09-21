@@ -1037,6 +1037,72 @@ tbody tr:hover {
   color: #bca8f5;
   font-size: 12px;
 }
+.issue-build-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+.issue-build-context .text-link,
+.issue-build-context .mono {
+  white-space: nowrap;
+}
+.issues-table {
+  min-width: 1120px;
+}
+.issue-trend {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) 110px;
+  align-items: center;
+  gap: 24px;
+  padding: 16px 24px;
+  margin-bottom: 20px;
+}
+.issue-trend h2 {
+  font-size: 14px;
+  margin: 0;
+}
+.issue-trend p {
+  margin: 4px 0 0;
+}
+.issue-trend-bars {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+.issue-trend-day {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.issue-trend-track {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  height: 42px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--surface-raised);
+}
+.issue-trend-bar {
+  display: block;
+  width: 100%;
+  background: var(--accent);
+  border-radius: 3px 3px 0 0;
+}
+.issue-trend-total {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+}
+.issue-trend-total strong {
+  font-size: 21px;
+  line-height: 1.2;
+}
 .separator {
   width: 1px;
   height: 14px;
@@ -1120,8 +1186,21 @@ tbody tr:hover {
 }
 .frame-function {
   color: #d1ccde;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-.application-frame .frame-function {
+.frame-function > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.frame-kind {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+.mapped-frame .frame-function {
   color: var(--foreground);
 }
 .frame-line {
@@ -1398,6 +1477,13 @@ tbody tr:hover {
   .issue-columns,
   .team-grid {
     grid-template-columns: 1fr;
+  }
+  .issue-trend {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .issue-trend-total {
+    align-items: flex-start;
   }
 }
 @media (max-width: 720px) {

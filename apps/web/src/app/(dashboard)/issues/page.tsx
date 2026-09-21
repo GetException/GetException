@@ -12,6 +12,8 @@ import { Heading } from "../../../components/dashboard/Heading";
 import { Pagination } from "../../../components/dashboard/Pagination";
 import { ProjectSelect } from "../../../components/dashboard/ProjectSelect";
 import { Status } from "../../../components/dashboard/Status";
+import { IssueBuildContext } from "../../../components/issues/IssueBuildContext";
+import { latestIssueEvents } from "../../../server/issues/insights";
 
 export default async function IssuesPage({
   searchParams,
@@ -44,6 +46,35 @@ export default async function IssuesPage({
     }),
     db.issue.count({ where }),
   ]);
+  const latestEvents = await latestIssueEvents(
+    db,
+    issues.map((issue) => issue.id),
+    filters,
+  );
+  const latestByIssue = new Map(
+    latestEvents.map((event) => [event.issueId, event]),
+  );
+  const projectByIssue = new Map(
+    issues.map((issue) => [issue.id, issue.projectId]),
+  );
+  const releasePairs = latestEvents
+    .filter((event) => event.release)
+    .map((event) => ({
+      projectId: projectByIssue.get(event.issueId)!,
+      name: event.release!,
+    }));
+  const releases = releasePairs.length
+    ? await db.release.findMany({
+        where: { OR: releasePairs },
+        include: { deployments: true },
+      })
+    : [];
+  const releasesByName = new Map(
+    releases.map((release) => [
+      `${release.projectId}:${release.name}`,
+      release,
+    ]),
+  );
 
   return (
     <div className="page">
@@ -142,50 +173,77 @@ export default async function IssuesPage({
                 <tr>
                   <th>Issue</th>
                   <th>Project</th>
+                  <th>Latest retained event</th>
                   <th>Status</th>
-                  <th className="numeric">Events</th>
+                  <th
+                    className="numeric"
+                    title="Lifetime count across all environments"
+                  >
+                    Total events
+                  </th>
                   <th>First seen</th>
                   <th>Last seen</th>
                 </tr>
               </thead>
               <tbody>
-                {issues.map((issue) => (
-                  <tr key={issue.id}>
-                    <td>
-                      <Link
-                        className="issue-title"
-                        href={`/issues/${issue.id}`}
-                      >
-                        <span className="issue-icon">!</span>
-                        <span>
-                          <strong>{issue.exceptionType}</strong>
-                          <small title={issue.title}>{issue.title}</small>
-                        </span>
-                      </Link>
-                    </td>
-                    <td>
-                      <Link
-                        className="text-link"
-                        href={`/projects/${issue.projectId}`}
-                      >
-                        {issue.project.name}
-                      </Link>
-                    </td>
-                    <td>
-                      <Status
-                        status={issue.status}
-                        regression={issue.regression}
-                      />
-                    </td>
-                    <td className="numeric">{number(issue.eventCount)}</td>
-                    <td className="muted date-cell">
-                      {dateTime(issue.firstSeen)}
-                    </td>
-                    <td className="muted date-cell">
-                      {dateTime(issue.lastSeen)}
-                    </td>
-                  </tr>
-                ))}
+                {issues.map((issue) => {
+                  const latest = latestByIssue.get(issue.id);
+                  const release = latest?.release
+                    ? releasesByName.get(`${issue.projectId}:${latest.release}`)
+                    : undefined;
+
+                  return (
+                    <tr key={issue.id}>
+                      <td>
+                        <Link
+                          className="issue-title"
+                          href={linkTo(`/issues/${issue.id}`, {
+                            event: latest?.eventId,
+                          })}
+                        >
+                          <span className="issue-icon">!</span>
+                          <span>
+                            <strong>{issue.exceptionType}</strong>
+                            <small title={issue.title}>{issue.title}</small>
+                          </span>
+                        </Link>
+                      </td>
+                      <td>
+                        <Link
+                          className="text-link"
+                          href={`/projects/${issue.projectId}`}
+                        >
+                          {issue.project.name}
+                        </Link>
+                      </td>
+                      <td>
+                        {latest ? (
+                          <IssueBuildContext
+                            projectId={issue.projectId}
+                            environment={latest.environment}
+                            releaseName={latest.release}
+                            release={release}
+                          />
+                        ) : (
+                          <span className="muted">No retained event</span>
+                        )}
+                      </td>
+                      <td>
+                        <Status
+                          status={issue.status}
+                          regression={issue.regression}
+                        />
+                      </td>
+                      <td className="numeric">{number(issue.eventCount)}</td>
+                      <td className="muted date-cell">
+                        {dateTime(issue.firstSeen)}
+                      </td>
+                      <td className="muted date-cell">
+                        {dateTime(issue.lastSeen)}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

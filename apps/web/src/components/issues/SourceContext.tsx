@@ -14,13 +14,22 @@ export function SourceContext({
     original?.contextLine === undefined
       ? []
       : [...original.preContext, original.contextLine, ...original.postContext];
+  const runtimeFrame =
+    !original && frame?.lineno === 0 && frame.filename.includes("<anonymous>");
+  const anonymousFrame = !original && frame?.filename.includes("<anonymous>");
 
   return (
     <section className="panel source-panel">
       <div className="section-heading">
         <h2>Source context</h2>
         <span className="pill">
-          {original ? "Original source" : "Source map unavailable"}
+          {original
+            ? "Original source"
+            : runtimeFrame
+              ? "Browser runtime"
+              : anonymousFrame
+                ? "No source file"
+                : "Source map unavailable"}
         </span>
       </div>
       {location && (
@@ -59,16 +68,20 @@ export function SourceContext({
             <strong>
               {original
                 ? "Source text was not included"
-                : "Original source is not available for this frame"}
+                : runtimeFrame
+                  ? "This frame belongs to the browser runtime"
+                  : "Original source is not available for this frame"}
             </strong>
             <p className="muted">
               {original
                 ? "The uploaded map restores the location but has no embedded source text."
-                : frame?.filename.includes("<anonymous>")
-                  ? "Code entered in the browser console has no source file to map. Select an application frame or reproduce the error inside your application."
-                  : state === "failed"
-                    ? "The source map could not be processed. Check the release artifacts and retry the upload."
-                    : "Upload source maps for this exact application release and JavaScript file. Existing events will be processed automatically."}
+                : runtimeFrame
+                  ? "Built-in functions such as JSON.parse have no application source map. Select the next mapped frame to see where your code called them."
+                  : anonymousFrame
+                    ? "This frame has no file in the deployed build, so it cannot be mapped to application source. Select a mapped frame to inspect the caller."
+                    : state === "failed"
+                      ? "The source map could not be processed. Check the release artifacts and retry the upload."
+                      : "Upload source maps for this exact application release and JavaScript file. Existing events will be processed automatically."}
             </p>
           </div>
         </div>
