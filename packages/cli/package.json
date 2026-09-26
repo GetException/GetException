@@ -1,6 +1,6 @@
 {
   "name": "@getexception/cli",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Private source map uploads for GetException",
   "type": "module",
   "license": "MIT",
