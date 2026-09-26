@@ -4,24 +4,31 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@base-ui/react/button";
 import { post } from "../forms/utils";
+import { InvitationLink } from "./InvitationLink";
 
-export function InvitationActions({
-  id,
-  mailEnabled,
-}: {
-  id: string;
-  mailEnabled: boolean;
-}) {
+export function InvitationActions({ id }: { id: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [reissued, setReissued] = useState<{
+    token: string;
+    expiresAt: string;
+  }>();
 
-  async function change(action: "resend" | "revoke") {
+  async function change(action: "reissue" | "revoke") {
     setBusy(true);
     setError("");
 
     try {
-      await post(`/api/dashboard/access/invitations/${id}/${action}`, {});
+      const result = await post(
+        `/api/dashboard/access/invitations/${id}/${action}`,
+        {},
+      );
+
+      if (action === "reissue") {
+        setReissued(result);
+      }
+
       router.refresh();
     } catch (error) {
       setError(error instanceof Error ? error.message : "Request failed.");
@@ -32,13 +39,14 @@ export function InvitationActions({
 
   return (
     <div>
+      {reissued && <InvitationLink {...reissued} />}
       <div className="actions">
         <Button
           className="button compact"
-          disabled={busy || !mailEnabled}
-          onClick={() => change("resend")}
+          disabled={busy}
+          onClick={() => change("reissue")}
         >
-          Resend
+          Reissue link
         </Button>
         <Button
           className="button compact"

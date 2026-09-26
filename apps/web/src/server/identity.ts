@@ -75,19 +75,16 @@ export function createIdentity(
               return false;
             }
 
-            const owner = user.members.some(
-              (member) => member.role === "owner",
-            );
             const verified =
               session.mfaVerifiedAt instanceof Date &&
               ["totp", "recovery"].includes(String(session.mfaMethod));
+            const enrollment =
+              !user.twoFactorEnabled &&
+              session.mfaMethod === "enrollment" &&
+              !session.mfaVerifiedAt &&
+              user.members.length > 0;
 
-            if (
-              (owner && !user.twoFactorEnabled) ||
-              (owner || user.twoFactorEnabled
-                ? !verified
-                : session.mfaMethod !== "password" && !verified)
-            ) {
+            if ((!user.twoFactorEnabled || !verified) && !enrollment) {
               return false;
             }
 
@@ -99,7 +96,7 @@ export function createIdentity(
     plugins: [
       organization({
         allowUserToCreateOrganization: false,
-        requireEmailVerificationOnInvitation: true,
+        requireEmailVerificationOnInvitation: false,
         teams: { enabled: true },
       }),
       twoFactor({ issuer: "GetException" }),

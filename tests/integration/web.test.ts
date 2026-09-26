@@ -20,7 +20,7 @@ it("serves invitation pages with working per-request script nonces and rejects u
     BETTER_AUTH_SECRET: secret(),
     TOTP_ENCRYPTION_KEY: secret(),
     MAIL_ENCRYPTION_KEY: secret(),
-    MAIL_ENABLED: "true",
+    MAIL_ENABLED: "false",
     AUTH_RATE_KEY: secret(),
     SOURCE_MAP_DIR: join(database.directory, "maps"),
   });
@@ -29,7 +29,7 @@ it("serves invitation pages with working per-request script nonces and rejects u
     await ready(child, port, "Test web");
     const nonces = new Set<string>();
 
-    for (const path of ["/invite", "/invite/verify", "/invite/register"]) {
+    for (const path of ["/invite"]) {
       const response = await fetch(`http://127.0.0.1:${port}${path}`);
 
       expect(response.status).toBe(200);
@@ -48,7 +48,13 @@ it("serves invitation pages with working per-request script nonces and rejects u
       ).toBe(true);
     }
 
-    expect(nonces.size).toBe(3);
+    expect(nonces.size).toBe(1);
+    expect((await fetch(`http://127.0.0.1:${port}/invite/verify`)).status).toBe(
+      404,
+    );
+    expect(
+      (await fetch(`http://127.0.0.1:${port}/invite/register`)).status,
+    ).toBe(404);
     const post = (path: string, requestOrigin = origin) =>
       fetch(`http://127.0.0.1:${port}${path}`, {
         method: "POST",

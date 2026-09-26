@@ -37,8 +37,9 @@ export default async function LoginPage({
         <span className="eyebrow">YOUR WORKSPACE</span>
         <h2>Welcome back</h2>
         <p className="muted">
-          Sign in with your password. Enter an authenticator code if two-factor
-          authentication is enabled.
+          Sign in with your password and a current authenticator code. Existing
+          accounts without an authenticator will set one up after the password
+          is verified.
         </p>
         {(await searchParams).registered === "1" && (
           <p role="status">
@@ -49,7 +50,7 @@ export default async function LoginPage({
         {(await searchParams).access === "inactive" && (
           <p role="alert" className="alert">
             Your account has no active workspace access. Ask an Owner to
-            activate your membership, or open your invitation email to join.
+            activate your membership, or open your invitation link to join.
           </p>
         )}
       </section>

@@ -3,16 +3,13 @@ import { InvitationActions } from "./InvitationActions";
 
 export function InvitationList({
   invitations,
-  mailEnabled,
 }: {
-  mailEnabled: boolean;
   invitations: {
     id: string;
     email: string;
     role: string;
     status: string;
     expiresAt: Date;
-    mail: { kind: string; status: string }[];
   }[];
 }) {
   return (
@@ -29,7 +26,6 @@ export function InvitationList({
                 <th>Email</th>
                 <th>Role</th>
                 <th>Status</th>
-                <th>Delivery</th>
                 <th>Expires · UTC</th>
                 <th>Actions</th>
               </tr>
@@ -39,9 +35,6 @@ export function InvitationList({
                 const expired =
                   invitation.status === "pending" &&
                   invitation.expiresAt.getTime() <= Date.now();
-                const delivery = invitation.mail.find(
-                  (mail) => mail.kind === "invitation",
-                )?.status;
 
                 return (
                   <tr key={invitation.id}>
@@ -52,18 +45,10 @@ export function InvitationList({
                         {expired ? "expired" : invitation.status}
                       </span>
                     </td>
-                    <td>
-                      {delivery === "dead"
-                        ? "Failed · resend to retry"
-                        : (delivery ?? "—")}
-                    </td>
                     <td>{dateTime(invitation.expiresAt)}</td>
                     <td>
                       {["pending", "expired"].includes(invitation.status) && (
-                        <InvitationActions
-                          id={invitation.id}
-                          mailEnabled={mailEnabled}
-                        />
+                        <InvitationActions id={invitation.id} />
                       )}
                     </td>
                   </tr>
@@ -74,9 +59,7 @@ export function InvitationList({
         </div>
       ) : (
         <p className="content-note">
-          {mailEnabled
-            ? "No invitations yet. Invite a teammate using the form below."
-            : "No invitations yet. Email delivery is disabled."}
+          No invitations yet. Create a personal link using the form below.
         </p>
       )}
     </section>

@@ -2,7 +2,9 @@ import { cookies } from "next/headers";
 import { getRuntime } from "../../../../server/runtime";
 import { InvitationService } from "../../../../server/invitations/service";
 import {
-  REGISTRATION_COOKIE,
+  beginRegistrationInput,
+  ENROLLMENT_COOKIE,
+  ENROLLMENT_TTL,
   tokenInput,
 } from "../../../../server/invitations/schemas";
 import {
@@ -22,20 +24,38 @@ export async function POST(
     const { service } = getRuntime();
     const invitations = new InvitationService(service);
     const ip = request.headers.get("x-real-ip") ?? "unknown";
-    const jar = await cookies();
-    const registration = jar.get(REGISTRATION_COOKIE)?.value ?? "";
 
-    if (["registration", "register", "accept-verified"].includes(action)) {
-      if (action === "registration") {
-        return json(await invitations.registrationDetails(registration));
-      }
+    if (action === "begin-registration") {
+      const { token, ...registration } = beginRegistrationInput.parse(input);
+      const result = await invitations.beginRegistration(
+        token,
+        registration,
+        ip,
+      );
+      const jar = await cookies();
 
-      const result =
-        action === "register"
-          ? await invitations.register(registration, input, ip)
-          : await invitations.accept(request.headers, registration, true);
+      jar.set(ENROLLMENT_COOKIE, result.enrollmentToken, {
+        ...cookieOptions,
+        maxAge: ENROLLMENT_TTL / 1_000,
+      });
 
-      jar.delete(REGISTRATION_COOKIE);
+      return json({
+        secret: result.secret,
+        uri: result.uri,
+        expiresAt: result.expiresAt,
+      });
+    }
+
+    if (action === "finish-registration") {
+      const jar = await cookies();
+      const enrollment = jar.get(ENROLLMENT_COOKIE)?.value ?? "";
+      const result = await invitations.finishRegistration(
+        enrollment,
+        input,
+        ip,
+      );
+
+      jar.delete(ENROLLMENT_COOKIE);
 
       return json(result);
     }
@@ -46,20 +66,6 @@ export async function POST(
       await service.rateLimit(ip, "invitation", "invitation_preview");
 
       return json(await invitations.preview(token));
-    }
-
-    if (action === "send-verification") {
-      return json(await invitations.requestVerification(token, ip));
-    }
-
-    if (action === "verify-email") {
-      jar.set(
-        REGISTRATION_COOKIE,
-        await invitations.verifyEmail(token, ip),
-        cookieOptions,
-      );
-
-      return json({ ok: true });
     }
 
     if (action === "accept") {

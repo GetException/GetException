@@ -1,6 +1,6 @@
 # Аудит безопасности GetException
 
-Дата проверки: 5 сентября 2026 года.
+Дата проверки архитектуры: 5 сентября 2026 года. Раздел identity и приглашений обновлён 26 сентября 2026 года по ADR-0002.
 
 Этот документ проверяет архитектуру, описанную в [ADR-0001](./0001-sentry-compatible-error-monitoring-platform.md), до начала реализации. Это аудит проектного решения, а не проверка готового кода и не penetration test. После появления приложения нужен повторный аудит исходного кода, Docker-конфигурации и production-сервера.
 
@@ -331,29 +331,31 @@ Session cookie GetException имеет префикс `__Host-`, не содер
 | Понижение последнего Owner            | Запрещено транзакционным ограничением и тестом гонки                                                     |
 | Захват новой установки через `/setup` | Одноразовый bootstrap-токен, атомарное создание root-пользователя и закрытие setup после первого запуска |
 
-Абсолютные ссылки приглашения и reset строятся только из домена, сохранённого при первоначальной настройке. Заголовки `Host`, `Forwarded-Host` и параметр `returnTo` не могут выбрать произвольный домен, а redirect target проходит allow-list. Поля `role`, `team`, `workspace` и `project` не принимаются из self-service профиля пользователя и назначаются только проверенной Owner-операцией.
+Ссылка приглашения формируется браузером из зафиксированного dashboard origin и секрета в fragment. Заголовки `Host`, `Forwarded-Host` и параметр `returnTo` не могут выбрать произвольный домен, а redirect target проходит allow-list. Поля `role`, `team`, `workspace` и `project` не принимаются из self-service профиля пользователя и назначаются только проверенной Owner-операцией.
 
 До завершения первоначальной настройки доступны только `/setup` и технические health endpoints. `/setup` требует секрет из bootstrap URL, не принимает root email, роль или домен через query string и ограничивает попытки. Root-пользователь, Owner membership, домен и TOTP создаются одной транзакцией. После успеха bootstrap-токен удаляется, все незавершённые setup-сессии отзываются и повторный вызов возвращает нейтральный отказ.
 
 ### Приглашения и выдача доступа
 
-Создание, повторная отправка и отзыв приглашения требуют роль Owner и TOTP step-up не старше пяти минут. Роль Owner нельзя назначить приглашением. Роль Developer или Viewer и список команд сохраняются в invitation до отправки письма и не принимаются из формы регистрации или запроса принятия.
+Создание, перевыпуск и отзыв приглашения требуют роль Owner и TOTP step-up не старше пяти минут. Роль Owner нельзя назначить приглашением. Роль Developer или Viewer и список команд сохраняются в invitation и не принимаются из формы регистрации или запроса принятия.
 
 Стандартные create, accept, reject и cancel routes organization plugin Better Auth не публикуются напрямую. Все операции проходят через серверный слой GetException. Внутренний invitation ID используется только для связей в БД и не принимается как credential.
 
 Invitation token содержит 32 случайных байта и хранится только как SHA-256 хеш. Ссылка помещает token в URL fragment. Код страницы отправляет его в теле POST-запроса, поэтому reverse proxy и web access log не получают token в request target. Страница не загружает сторонние ресурсы, использует `Referrer-Policy: no-referrer`, а ответы preview и accept получают `Cache-Control: no-store`.
 
-Anonymous preview возвращает только название workspace, имя пригласившего, роль, команды, срок и маскированный email. Ошибки для неизвестного, истёкшего, принятого и отозванного токена одинаковы. Preview, accept и resend имеют rate limit, а token, полный email и факт существования Account не попадают в audit metadata.
+Anonymous preview возвращает только название workspace, имя пригласившего, роль, команды и маскированный email. Ошибки для неизвестного, истёкшего, принятого и отозванного токена одинаковы. Preview, accept, registration и reissue имеют rate limit, а token, полный email и факт существования Account не попадают в audit metadata.
 
-Принятие существующим Account требует действующий `pending` token и подтверждённый email, который совпадает с email приглашения после нормализации. Для нового пользователя invitation token может только запросить отдельное подтверждение на email из invitation. До перехода по ссылке подтверждения сервер не принимает пароль и не создаёт Account. Одноразовая ссылка выдаёт короткую registration session в `HttpOnly` cookie.
+Принятие существующим Account требует действующий `pending` token, полную password + MFA сессию и совпадение нормализованного email с email приглашения. Для нового пользователя bearer-ссылка заменяет прежнее email-подтверждение: Owner отвечает за проверку получателя и передачу через доверенный личный канал. Кража ссылки до завершения регистрации позволяет злоумышленнику выбрать собственные пароль и TOTP, поэтому срок ограничен 24 часами, ссылка одноразовая и легко отзывается.
 
-Завершение регистрации или принятие существующим Account блокирует invitation и создаёт Member вместе с team membership в одной транзакции. Частичное принятие невозможно. Уникальные ограничения и смена состояния позволяют успешно завершиться только одному из параллельных запросов.
+Новый пользователь сначала передаёт имя и пароль и получает короткую enrollment session в `HttpOnly`, `Secure`, `SameSite=Strict` cookie. Пароль хранится только как Argon2 hash, pending TOTP secret шифруется. User, Account, Member и TeamMember ещё не существуют и доступ к dashboard отсутствует.
 
-Повторная отправка создаёт новый token, меняет хеш и срок, а также увеличивает revision записи mail outbox. Worker перед отправкой проверяет текущую revision. Отзыв переводит invitation в `revoked` и отменяет необработанное письмо. Уже доставленное старое письмо остаётся бесполезным, потому что сервер повторно проверяет хеш и состояние.
+Первый правильный TOTP-код блокирует invitation и enrollment, а затем одной транзакцией создаёт Account, active MFA credential, recovery-коды, Member и team memberships. Частичное принятие невозможно. Уникальные ограничения и смена состояния позволяют успешно завершиться только одному из параллельных запросов.
+
+Перевыпуск создаёт новый token, меняет хеш, срок и revision, удаляя незавершённый enrollment. Отзыв переводит invitation в `revoked`. Старые ссылки бесполезны, потому что сервер повторно проверяет хеш, revision и состояние. Миграция очищает verification sessions и зашифрованные outbox payload прежнего email-flow.
 
 ### Хранение и проверка TOTP
 
-Установка с отключённой почтой (`MAIL_ENABLED=false`) сохраняет обязательный TOTP Owner и серверные проверки доступа. Приглашения закрыты сервером до включения доставки; отзыв прежних приглашений остаётся доступен Owner. Отсутствие SMTP не разрешает ручную выдачу invitation tokens, пропуск подтверждения email или восстановление Owner одним письмом. Worker не читает очередь для отправки и не расходует попытки доставки; существующие ciphertext и ключи сохраняются.
+TOTP обязателен для Owner, Developer и Viewer. Установка с `MAIL_ENABLED=false` поддерживает весь auth и invitation flow; SMTP не является фактором или recovery-механизмом. Существующему участнику без MFA правильный пароль создаёт только 15-минутную enrollment session. Database hook разрешает ей открыть лишь MFA enrollment API, а обычная `authenticate` закрывает dashboard до первого правильного кода.
 
 Сервер хранит TOTP как versioned AES-256-GCM ciphertext с отдельным production key. В authenticated additional data входят user ID и состояние `pending` или `active`. Ingest, worker-events и worker-retention не получают ключ. Production web не запускается при отсутствии или неверной длине ключа, а backup секретов обязан включать этот ключ.
 
@@ -361,23 +363,22 @@ Anonymous preview возвращает только название workspace, 
 
 Проверка принимает только шесть цифр в текущем 30-секундном окне или одном соседнем окне с каждой стороны. Сервер сравнивает значения за постоянное время, хранит последний принятый counter и обновляет его под блокировкой строки в той же транзакции, которая создаёт сессию или подтверждает step-up. Повторное и параллельное использование одного кода запрещено.
 
-Owner не использует trusted-device или email OTP для обхода TOTP. Auth rate limits хранятся в PostgreSQL и считаются по хешированным IP и account identifiers, поэтому перезапуск или вторая реплика web не сбрасывают ограничение.
+Ни одна роль не использует trusted-device или email OTP для обхода TOTP. Auth rate limits хранятся в PostgreSQL и считаются по хешированным IP и account identifiers, поэтому перезапуск или вторая реплика web не сбрасывают ограничение.
 
-### Восстановление TOTP Owner
+### Восстановление TOTP
 
-Сброс TOTP только по доступу к email превратил бы почту в способ обойти обязательный второй фактор. Поэтому:
+Сброс TOTP только по доступу к email превратил бы почту в способ обойти обязательный второй фактор. В текущей итерации:
 
 - обычный Owner использует одноразовый recovery-код;
-- если есть другой активный Owner, reset требует его подтверждения и повторной проверки его TOTP;
-- для единственного Owner используется отдельный длинный offline recovery secret, созданный при bootstrap и находящийся у оператора production, а не в email или БД открытым текстом;
-- recovery secret хранится в БД только как hash, одноразовый и после применения заменяется;
-- reset отзывает все сессии аккаунта, требует заново настроить TOTP и записывается в audit log;
-- обычная служба поддержки или Developer не могут выключить TOTP Owner;
-- перед production рекомендуется создать минимум двух Owner и проверить процедуру восстановления.
+- recovery-коды доступны каждой роли, одноразовы и хранятся только как hashes;
+- интерфейс и публичный API не умеют выключать обязательный MFA;
+- при потере TOTP и всех recovery-кодов автоматического reset нет: нужен оператор и проверенный backup;
+- будущий reset через другого Owner или отдельный offline recovery secret требует самостоятельной реализации, тестов и ADR; он не должен опираться только на email;
+- перед production рекомендуется создать минимум двух Owner и сохранить recovery-коды отдельно от устройств с TOTP.
 
 ### Чувствительные изменения
 
-Для смены email, управления TOTP, создания CI-токена, замены DSN, повышения до Owner и удаления проекта нужна свежая сессия. Сервер требует пароль и TOTP step-up не старше пяти минут. После смены пароля, email, MFA, роли или membership старые сессии отзываются либо немедленно переоценивают права на сервере.
+Для приглашений и доступа, создания CI-токена, замены DSN, повышения до Owner и удаления проекта нужна свежая сессия. Сервер требует пароль и TOTP step-up не старше пяти минут. После включения MFA, смены роли или membership старые сессии отзываются либо немедленно переоценивают права на сервере.
 
 ## Source maps и CI
 
@@ -487,7 +488,7 @@ Audit log защищает от обычного изменения через �
 | S-05 | В событие случайно попал access token или личные данные                                     | высокая              | SDK allow-list, server allow-list, scrubber, canary tests, короткий retention          | Секрет в обычной/закодированной строке может не распознаться                |
 | S-06 | SQL injection в raw query или динамической сортировке                                       | высокая              | Prisma CRUD, параметризация, запрет Unsafe/Prisma.raw(input), CI scan                  | Ошибка review в новом коде                                                  |
 | S-07 | RCE/OOM/path traversal при source-map upload/parse                                          | высокая              | Размеры, безопасные имена, изолированный Worker, no egress, limits                     | Zero-day parser dependency                                                  |
-| S-08 | Захват Owner через слабый TOTP recovery                                                     | высокая              | Recovery codes; второй Owner или offline bootstrap recovery; session revoke            | Компрометация одновременно recovery material и email/первого фактора        |
+| S-08 | Захват аккаунта через слабый TOTP recovery                                                  | высокая              | Одноразовые recovery-коды; отсутствие email reset и API отключения MFA; session revoke | Потеря всех факторов требует восстановления из проверенного backup          |
 | S-09 | Утечка CI upload token или подмена release artifact                                         | высокая              | Protected environment, project/upload-only token, checksum, atomic publish             | До отзыва возможны ложные stack traces                                      |
 | S-10 | Выполнение кода через prototype pollution/unsafe merge                                      | высокая              | Запрет специальных ключей, no deep merge, новый typed object, fuzz tests               | Уязвимость зависимости после sanitation                                     |
 | S-11 | SSRF во внутреннюю сеть                                                                     | высокая              | Никогда не fetch URL из event/map metadata; ingest/worker no egress                    | Компрометация web с разрешённым egress                                      |
@@ -500,10 +501,10 @@ Audit log защищает от обычного изменения через �
 | S-18 | Ошибочная proxy-конфигурация позволяет подделать IP или отправляет cookie                   | средняя              | Replace forwarded headers, separate origins, credentials omit, proxy tests             | Неверное ручное изменение production config                                 |
 | S-19 | Удалённый/повреждённый backup невозможно восстановить                                       | средняя              | Separate write/read credentials, checksum, versioning, ручной restore test             | Только 3 ежедневные копии                                                   |
 | S-20 | DDoS заполняет канал или ресурсы сервера                                                    | высокая              | Caddy limits, quotas, bounded queue, внешний WAF/CDN при необходимости                 | Один self-hosted сервер не остановит крупный botnet                         |
-| S-21 | Host-header/open-redirect отравляет invite/reset URL                                        | высокая              | Сохранённый домен установки, exact redirect URI, allow-list return target              | Ошибка в новом auth route                                                   |
+| S-21 | Host-header/open-redirect отравляет invite URL                                              | высокая              | Link строит dashboard browser; fragment не уходит серверу; exact redirect allow-list   | Ошибка в новом auth route                                                   |
 | S-22 | Злонамеренный Owner или root скрывает действия                                              | средняя              | Персональные аккаунты, два Owner, re-auth, audit log                                   | Внутренний DB/host admin может изменить локальный журнал                    |
 | S-23 | Посторонний первым завершает `/setup` и становится root-пользователем                       | критическая          | Одноразовый bootstrap-токен, rate limit, атомарный setup, немедленное закрытие route   | Утечка bootstrap URL до завершения настройки                                |
-| S-24 | Гонка, утечка URL или подмена полей приглашения выдаёт чужой Account, роль или команду      | высокая              | Email-first registration, снимок role/team, row lock, одна транзакция, unique checks   | Ошибка в custom adapter вокруг Better Auth                                  |
+| S-24 | Гонка, кража URL или подмена полей приглашения выдаёт чужой Account, роль или команду       | высокая              | Trusted channel, 24h bearer, снимок role/team, TOTP до commit, locks, unique checks    | Кража ссылки до регистрации остаётся достаточной для захвата приглашения    |
 
 ## Что обязательно сделать до первого production
 
@@ -517,8 +518,8 @@ Audit log защищает от обычного изменения через �
 - изолировать source-map parser и проверить traversal/zip bomb/OOM cases;
 - защитить `NPM_TOKEN`, release environment и package provenance;
 - защитить первоначальную настройку одноразовым bootstrap-токеном и закрыть `/setup` после создания root-пользователя;
-- реализовать закрытые приглашения без публичных ссылок, проверить привязку к email, ротацию token и конкурентное принятие;
-- реализовать безопасный Owner MFA recovery;
+- реализовать ручные одноразовые приглашения, проверить ротацию token, обязательный TOTP и конкурентное принятие;
+- проверить recovery-коды всех ролей и задокументировать операторское восстановление при потере всех факторов;
 - настроить encrypted backup с отдельными write/restore credentials;
 - провести ручной review production Compose/Caddy/firewall/secrets.
 
@@ -557,10 +558,12 @@ Audit log защищает от обычного изменения через �
 - TOTP остаётся pending до проверки первого кода, а ciphertext нельзя расшифровать для другого user ID или состояния credential;
 - повторное и параллельное использование одного TOTP code не создаёт сессию и не подтверждает step-up;
 - ответы MFA имеют `Cache-Control: no-store`, а audit log не содержит TOTP secret, code или recovery code;
-- trusted-device и email OTP не позволяют Owner обойти TOTP;
+- trusted-device и email OTP не позволяют ни одной роли обойти TOTP;
 - две реплики web используют общий auth rate limit из PostgreSQL;
-- password reset отзывает сессии, но не отключает TOTP;
-- Owner TOTP reset требует утверждённый recovery path;
+- legacy-участник без MFA получает только enrollment session и не открывает dashboard;
+- Account/Member не создаются до первого верного TOTP приглашённого пользователя;
+- reissue/revoke инвалидируют как старую ссылку, так и незавершённый enrollment;
+- при потере всех факторов отсутствует email reset и публичный bypass;
 - гонка двух запросов не может удалить/понизить последнего Owner.
 
 ### CI, npm и source maps

@@ -4,24 +4,28 @@ import type { Transaction } from "@getexception/db";
 import type { AuthService } from "../auth-service";
 import { AuthError } from "../auth-error";
 import { createIdentity } from "../identity";
-import { digest, hashPassword, passwordAllowed, token } from "../crypto";
+import {
+  decryptSecret,
+  digest,
+  encryptSecret,
+  hashPassword,
+  newTotpSecret,
+  passwordAllowed,
+  recoveryCodes,
+  token,
+  verifyTotp,
+} from "../crypto";
 import { ownerTransaction } from "../owner-transaction";
 import {
+  codeInput,
   invitationInput,
   registrationInput,
+  ENROLLMENT_TTL,
   INVITATION_TTL,
-  VERIFICATION_TTL,
 } from "./schemas";
-import { cancelInvitationMail, queueInvitationMail } from "./mail";
 
 export class InvitationService {
   constructor(private readonly auth: AuthService) {}
-
-  private requireMail() {
-    if (!this.auth.config.MAIL_ENABLED) {
-      throw new AuthError(503, "mail_disabled");
-    }
-  }
 
   private async lock(tx: Transaction, id: string) {
     const found = await tx.invitation.findUnique({ where: { id } });
@@ -48,8 +52,6 @@ export class InvitationService {
   }
 
   private async find(value: string) {
-    this.requireMail();
-
     if (!/^[a-f0-9]{64}$/.test(value)) {
       throw new AuthError(404);
     }
@@ -69,11 +71,37 @@ export class InvitationService {
     return invitation;
   }
 
+  private async clearLegacyDelivery(tx: Transaction, invitationId: string) {
+    await tx.invitationVerification.deleteMany({ where: { invitationId } });
+    await tx.mailOutbox.updateMany({
+      where: {
+        invitationId,
+        status: { in: ["pending", "processing"] },
+      },
+      data: {
+        payload: null,
+        status: "cancelled",
+        leaseToken: null,
+        leaseUntil: null,
+      },
+    });
+    await tx.mailOutbox.updateMany({
+      where: {
+        invitationId,
+        status: { notIn: ["pending", "processing"] },
+      },
+      data: {
+        payload: null,
+        leaseToken: null,
+        leaseUntil: null,
+      },
+    });
+  }
+
   async create(headers: Headers, input: unknown) {
     const data = invitationInput.parse(input);
 
     return ownerTransaction(this.auth, headers, async (tx, current) => {
-      this.requireMail();
       const organizationId = current.member.organizationId;
       const teams = await tx.team.count({
         where: { id: { in: data.teamIds }, organizationId },
@@ -123,38 +151,18 @@ export class InvitationService {
         },
       });
 
-      await this.send(tx, invitation, value);
       await this.auth.audit(tx, "invitation_create", true, current.user.id);
 
-      return { id: invitation.id };
+      return {
+        id: invitation.id,
+        token: value,
+        expiresAt: invitation.expiresAt,
+      };
     });
   }
 
-  private async send(
-    tx: Transaction,
-    invitation: { id: string; email: string; expiresAt: Date },
-    value: string,
-  ) {
-    await queueInvitationMail(
-      tx,
-      invitation.id,
-      "invitation",
-      {
-        to: invitation.email,
-        subject: "Your GetException invitation",
-        text: `You have been invited to GetException. Review your invitation:\n\n${this.auth.config.DASHBOARD_ORIGIN}/invite#${value}\n\nThis link expires in 48 hours. If you were not expecting it, ignore this email.`,
-      },
-      invitation.expiresAt,
-      this.auth.config.MAIL_ENCRYPTION_KEY,
-    );
-  }
-
-  async change(headers: Headers, id: string, action: "resend" | "revoke") {
+  async change(headers: Headers, id: string, action: "reissue" | "revoke") {
     return ownerTransaction(this.auth, headers, async (tx, current) => {
-      if (action === "resend") {
-        this.requireMail();
-      }
-
       const existing = await tx.invitation.findFirst({
         where: { id, organizationId: current.member.organizationId },
       });
@@ -170,7 +178,7 @@ export class InvitationService {
         throw new AuthError(409);
       }
 
-      if (action === "resend") {
+      if (action === "reissue") {
         if (
           await tx.member.findFirst({
             where: {
@@ -208,10 +216,8 @@ export class InvitationService {
         });
       }
 
-      await cancelInvitationMail(tx, id);
-      await tx.invitationVerification.deleteMany({
-        where: { invitationId: id },
-      });
+      await tx.invitationEnrollment.deleteMany({ where: { invitationId: id } });
+      await this.clearLegacyDelivery(tx, id);
       const value = token();
       const invitation = await tx.invitation.update({
         where: { id },
@@ -223,18 +229,16 @@ export class InvitationService {
         },
       });
 
-      if (action === "resend") {
-        await this.send(tx, invitation, value);
-      }
-
       await this.auth.audit(
         tx,
-        action === "resend" ? "invitation_resend" : "invitation_revoke",
+        action === "reissue" ? "invitation_reissue" : "invitation_revoke",
         true,
         current.user.id,
       );
 
-      return { ok: true };
+      return action === "reissue"
+        ? { id: invitation.id, token: value, expiresAt: invitation.expiresAt }
+        : { ok: true };
     });
   }
 
@@ -274,10 +278,26 @@ export class InvitationService {
     };
   }
 
-  async requestVerification(value: string, ip: string) {
+  async beginRegistration(value: string, input: unknown, ip: string) {
+    const data = registrationInput.parse(input);
     const found = await this.find(value);
 
-    await this.auth.rateLimit(ip, found.id, "invitation_email");
+    await this.auth.rateLimit(ip, found.id, "invitation_register");
+
+    if (!passwordAllowed(data.password)) {
+      throw new AuthError(400);
+    }
+
+    if (await this.auth.db.user.findUnique({ where: { email: found.email } })) {
+      throw new AuthError(409, "account_exists");
+    }
+
+    const passwordHash = await hashPassword(data.password);
+    const enrollmentToken = token();
+    const enrollmentId = randomUUID();
+    const secret = newTotpSecret();
+    const expiresAt = new Date(Date.now() + ENROLLMENT_TTL);
+
     await this.auth.db.$transaction(async (tx) => {
       const invitation = await this.lock(tx, found.id);
 
@@ -285,133 +305,61 @@ export class InvitationService {
         throw new AuthError(410);
       }
 
-      const previous = await tx.mailOutbox.findUnique({
-        where: {
-          invitationId_kind: {
-            invitationId: invitation.id,
-            kind: "verification",
-          },
-        },
-      });
-
-      if (previous && previous.nextAttemptAt.getTime() > Date.now() - 30_000) {
-        throw new AuthError(429);
+      if (await tx.user.findUnique({ where: { email: invitation.email } })) {
+        throw new AuthError(409, "account_exists");
       }
 
-      await tx.invitationVerification.deleteMany({
+      await tx.invitationEnrollment.deleteMany({
         where: { invitationId: invitation.id },
       });
-      const verification = token();
-      const expiresAt = new Date(
-        Math.min(invitation.expiresAt.getTime(), Date.now() + VERIFICATION_TTL),
-      );
-
-      await tx.invitationVerification.create({
+      await tx.invitationEnrollment.create({
         data: {
-          id: randomUUID(),
+          id: enrollmentId,
           invitationId: invitation.id,
           revision: invitation.revision,
-          tokenHash: digest(verification),
+          tokenHash: digest(enrollmentToken),
+          name: data.name,
+          passwordHash,
+          pendingCiphertext: encryptSecret(
+            secret,
+            enrollmentId,
+            "pending",
+            this.auth.config.TOTP_ENCRYPTION_KEY,
+          ),
           expiresAt,
         },
       });
-      await queueInvitationMail(
-        tx,
-        invitation.id,
-        "verification",
-        {
-          to: invitation.email,
-          subject: "Confirm your email for GetException",
-          text: `Confirm your email before creating your account:\n\n${this.auth.config.DASHBOARD_ORIGIN}/invite/verify#${verification}\n\nThis link expires in 15 minutes. Ignore it if you did not request it.`,
-        },
-        expiresAt,
-        this.auth.config.MAIL_ENCRYPTION_KEY,
-      );
     });
 
-    return { ok: true };
+    return {
+      enrollmentToken,
+      secret,
+      uri: `otpauth://totp/GetException:${encodeURIComponent(found.email)}?secret=${secret}&issuer=GetException&algorithm=SHA1&digits=6&period=30`,
+      expiresAt,
+    };
   }
 
-  async verifyEmail(value: string, ip: string) {
-    this.requireMail();
+  private async enrollment(value: string, tx: Transaction = this.auth.db) {
+    if (!/^[a-f0-9]{64}$/.test(value)) {
+      throw new AuthError(410);
+    }
 
-    await this.auth.rateLimit(ip, "invitation", "invitation_verify");
-    const proof = await this.auth.db.invitationVerification.findUnique({
+    const enrollment = await tx.invitationEnrollment.findUnique({
       where: { tokenHash: digest(value) },
-    });
-
-    if (!proof) {
-      throw new AuthError(410);
-    }
-
-    return this.auth.db.$transaction(async (tx) => {
-      const invitation = await this.lock(tx, proof.invitationId);
-      const current = await tx.invitationVerification.findUnique({
-        where: { id: proof.id },
-      });
-
-      if (
-        !current ||
-        current.tokenHash !== digest(value) ||
-        current.revision !== invitation.revision ||
-        current.expiresAt.getTime() <= Date.now()
-      ) {
-        throw new AuthError(410);
-      }
-
-      const registration = token();
-
-      await tx.invitationVerification.update({
-        where: { id: proof.id },
-        data: {
-          tokenHash: null,
-          registrationHash: digest(registration),
-          registrationExpiresAt: new Date(Date.now() + VERIFICATION_TTL),
-        },
-      });
-
-      return registration;
-    });
-  }
-
-  private async registration(value: string, tx: Transaction = this.auth.db) {
-    this.requireMail();
-
-    if (!value) {
-      throw new AuthError(410);
-    }
-
-    const proof = await tx.invitationVerification.findUnique({
-      where: { registrationHash: digest(value) },
-      include: { invitation: true },
+      include: { invitation: { include: { teams: true } } },
     });
 
     if (
-      !proof ||
-      !proof.registrationExpiresAt ||
-      proof.registrationExpiresAt.getTime() <= Date.now() ||
-      proof.invitation.status !== "pending" ||
-      proof.invitation.expiresAt.getTime() <= Date.now() ||
-      proof.revision !== proof.invitation.revision
+      !enrollment ||
+      enrollment.expiresAt.getTime() <= Date.now() ||
+      enrollment.invitation.status !== "pending" ||
+      enrollment.invitation.expiresAt.getTime() <= Date.now() ||
+      enrollment.revision !== enrollment.invitation.revision
     ) {
       throw new AuthError(410);
     }
 
-    return proof;
-  }
-
-  async registrationDetails(value: string) {
-    const proof = await this.registration(value);
-    const existing = await this.auth.db.user.findUnique({
-      where: { email: proof.invitation.email },
-      select: { id: true },
-    });
-
-    // Only an email-verified registration session can learn that an account already exists.
-    return {
-      email: proof.invitation.email,
-      existingAccount: Boolean(existing),
-    };
+    return enrollment;
   }
 
   private async join(
@@ -467,47 +415,51 @@ export class InvitationService {
       where: { id: invitation.id },
       data: { status: "accepted", tokenHash: null, acceptedAt: new Date() },
     });
-    await tx.invitationVerification.deleteMany({
+    await tx.invitationEnrollment.deleteMany({
       where: { invitationId: invitation.id },
     });
-    await cancelInvitationMail(tx, invitation.id);
+    await this.clearLegacyDelivery(tx, invitation.id);
     await this.auth.audit(tx, "invitation_accept", true, userId);
   }
 
-  async register(value: string, input: unknown, ip: string) {
-    const data = registrationInput.parse(input);
-    const proof = await this.registration(value);
+  async finishRegistration(value: string, input: unknown, ip: string) {
+    const { code } = codeInput.parse(input);
+    const found = await this.enrollment(value);
 
-    await this.auth.rateLimit(
-      ip,
-      proof.invitation.email,
-      "invitation_register",
-    );
-
-    if (!passwordAllowed(data.password)) {
-      throw new AuthError(400);
-    }
-
-    const password = await hashPassword(data.password);
+    await this.auth.rateLimit(ip, found.invitation.email, "invitation_finish");
 
     return this.auth.db.$transaction(
       async (tx) => {
-        const invitation = await this.lock(tx, proof.invitationId);
+        const invitation = await this.lock(tx, found.invitationId);
 
-        await this.registration(value, tx);
+        await tx.$queryRaw`SELECT id FROM invitation_enrollment WHERE id = ${found.id} FOR UPDATE`;
+        const enrollment = await this.enrollment(value, tx);
 
         if (await tx.user.findUnique({ where: { email: invitation.email } })) {
-          throw new AuthError(409);
+          throw new AuthError(409, "account_exists");
         }
 
+        const secret = decryptSecret(
+          enrollment.pendingCiphertext,
+          enrollment.id,
+          "pending",
+          this.auth.config.TOTP_ENCRYPTION_KEY,
+        );
+        const counter = verifyTotp(secret, code, -1n);
+
+        if (counter === null) {
+          throw new AuthError();
+        }
+
+        const userId = randomUUID();
         const context = await createIdentity(tx, this.auth.config).$context;
         const user = await runWithAdapter(context.adapter, () =>
           context.internalAdapter.createUser({
-            id: randomUUID(),
-            name: data.name,
+            id: userId,
+            name: enrollment.name,
             email: invitation.email,
             emailVerified: true,
-            twoFactorEnabled: false,
+            twoFactorEnabled: true,
           }),
         );
 
@@ -516,29 +468,48 @@ export class InvitationService {
             userId: user.id,
             accountId: user.id,
             providerId: "credential",
-            password,
+            password: enrollment.passwordHash,
           }),
         );
+        await tx.mfaCredential.create({
+          data: {
+            id: randomUUID(),
+            userId: user.id,
+            state: "active",
+            lastCounter: counter,
+            ciphertext: encryptSecret(
+              secret,
+              user.id,
+              "active",
+              this.auth.config.TOTP_ENCRYPTION_KEY,
+            ),
+          },
+        });
+        const codes = recoveryCodes();
+
+        await tx.recoveryCode.createMany({
+          data: codes.map((recoveryCode) => ({
+            id: randomUUID(),
+            userId: user.id,
+            codeHash: digest(recoveryCode),
+          })),
+        });
         await this.join(tx, invitation, user.id);
 
-        return { ok: true };
+        return { recoveryCodes: codes };
       },
-      { timeout: 15000 },
+      { timeout: 15_000 },
     );
   }
 
-  async accept(headers: Headers, value: string, verified = false) {
+  async accept(headers: Headers, value: string) {
     const current = await this.auth.authenticate(headers);
-    const found = verified
-      ? (await this.registration(value)).invitation
-      : await this.find(value);
+    const found = await this.find(value);
 
     return this.auth.db.$transaction(async (tx) => {
       const invitation = await this.lock(tx, found.id);
 
-      if (verified) {
-        await this.registration(value, tx);
-      } else if (invitation.tokenHash !== digest(value)) {
+      if (invitation.tokenHash !== digest(value)) {
         throw new AuthError(410);
       }
 

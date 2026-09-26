@@ -10,18 +10,19 @@ export async function POST(
     const { action } = await context.params;
     const data = await readBody(request);
     const service = new MfaService(getRuntime().service);
-    const ip = request.headers.get("x-real-ip") ?? "unknown";
 
-    if (action === "prepare") {
-      return json(await service.prepare(request.headers, data, ip));
+    if (action === "details") {
+      return json(await service.details(request.headers));
     }
 
     if (action === "finish") {
-      return json(await service.finish(request.headers, data, ip));
-    }
-
-    if (action === "disable") {
-      return json(await service.disable(request.headers, data, ip));
+      return json(
+        await service.finish(
+          request.headers,
+          data,
+          request.headers.get("x-real-ip") ?? "unknown",
+        ),
+      );
     }
 
     return json({ error: "Not found" }, 404);

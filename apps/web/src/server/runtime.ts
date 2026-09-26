@@ -29,7 +29,10 @@ export function createRuntime(
               await setSessionCookie(ctx, result, false);
               ctx.setHeader("Cache-Control", "no-store");
 
-              return ctx.json({ ok: true });
+              return ctx.json({
+                ok: true,
+                enrollmentRequired: result.enrollmentRequired,
+              });
             } catch (error) {
               throw new APIError(
                 error instanceof AuthError && error.status === 429

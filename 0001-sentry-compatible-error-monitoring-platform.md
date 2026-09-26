@@ -6,6 +6,8 @@ last-security-review: 2026-09-05
 
 # ADR-0001: Создать GetException как Sentry-совместимый сервис мониторинга ошибок
 
+> Решения о SMTP-приглашениях, email-подтверждении, восстановлении пароля через email и добровольном MFA для Developer/Viewer заменены [ADR-0002](./0002-manual-invitations-mandatory-mfa.md).
+
 ## Статус
 
 Решение принято для реализации MVP.

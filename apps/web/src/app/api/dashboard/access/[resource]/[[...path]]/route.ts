@@ -28,7 +28,7 @@ export async function POST(
       if (
         id &&
         path.length === 2 &&
-        (action === "resend" || action === "revoke")
+        (action === "reissue" || action === "revoke")
       ) {
         return json(await invitations.change(request.headers, id, action));
       }

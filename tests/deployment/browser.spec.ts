@@ -86,16 +86,14 @@ test("installed release: setup, real SDK events and preserved login", async ({
     );
 
     expect(stepUp).toBe(200);
-    phase = "email disabled";
+    phase = "manual invitation";
     await page.goto(origin + "/members");
-    await expect(
-      page.getByText(
-        /Invitations are unavailable while email delivery is disabled/,
-      ),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Send invitation", exact: true }),
-    ).toHaveCount(0);
+    await page.getByLabel("Email", { exact: true }).fill("viewer@example.test");
+    await page.getByRole("checkbox").first().check();
+    await page
+      .getByRole("button", { name: "Create invitation link", exact: true })
+      .click();
+    await expect(page.getByTestId("invitation-link")).toContainText("/invite#");
 
     phase = "project";
     await page.goto(origin + "/projects/new");

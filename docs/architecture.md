@@ -16,6 +16,8 @@ TOTP: 160 случайных бит, шесть цифр, 30 секунд, ок�
 
 Cookie `__Host-getexception.session`: Secure, HttpOnly, SameSite=Strict, Path=/, без Domain. Session cache/refresh отключены; абсолютный TTL 8 часов, idle TTL 30 минут. В БД есть `mfaVerifiedAt` и `mfaMethod`; опасные операции требуют `totp` и возраст ≤5 минут. Recovery позволяет войти, но не выдать DSN без нового TOTP. `trustDevice` строго равен `false`; Owner email OTP отсутствует. Signup, invitation и все штатные MFA routes Better Auth не опубликованы. Все изменяющие HTTP-запросы проверяют точный Origin и JSON content type. Setup/status/step-up и ответы auth получают `Cache-Control: no-store`.
 
+TOTP обязателен для всех ролей. У старого Account без MFA правильный пароль создаёт отдельную 15-минутную сессию с `mfaMethod=enrollment`; database hook разрешает её создать, но обычная авторизация dashboard всегда отклоняет. Через неё доступны только получение зашифрованного pending secret и подтверждение первого кода. Успех создаёт active credential и recovery hashes, включает MFA и отзывает все сессии.
+
 Web проверяет ключи и состояние миграций до открытия порта. Audit — append-only для web: только action, success, actor ID и время. Тексты ошибок, secret, пароль и введённые коды в audit не записываются.
 
 ## Приём и очередь
@@ -42,11 +44,11 @@ Worker claims `FOR UPDATE SKIP LOCKED` в короткой транзакции.
 | `getexception_worker`  | Inbox claim/update/delete и issue/event/release; без доступа к auth/MFA.                                                                                    |
 | `getexception_backup`  | SELECT, без изменения данных/DDL.                                                                                                                           |
 
-Три миграции: Prisma schema, SQL constraints/views/grants/triggers и issue workflow с ограниченными правами изменения статуса. Raw SQL используется в фиксированных параметризованных запросах, где Prisma не выражает row lock/конкурентную операцию; никакой интерполяции недоверенных SQL-фрагментов. SQL миграций статический и проверяется отдельно. Connections явно используют UTC; все временные поля — `timestamptz` (daily buckets — `date`). Это исключает расхождения Prisma adapter и PostgreSQL с локальным timezone.
+Девять последовательных миграций содержат Prisma schema, SQL constraints/views/grants/triggers и прикладные расширения. Raw SQL используется в фиксированных параметризованных запросах, где Prisma не выражает row lock/конкурентную операцию; никакой интерполяции недоверенных SQL-фрагментов. SQL миграций статический и проверяется отдельно. Connections явно используют UTC; все временные поля — `timestamptz` (daily buckets — `date`). Это исключает расхождения Prisma adapter и PostgreSQL с локальным timezone.
 
 Для ingest генерируется отдельный **клиентский projection** `ingest.prisma`: только четыре вставляемые колонки и readonly views. Полный Prisma client добавляет defaults в INSERT и нарушает column-level grants. Источник миграций — только `schema.prisma`; **никогда не запускайте migrate по ingest.prisma**.
 
-`runtime_schema` закрывает readiness при незавершённой/неизвестной версии миграций. При следующей миграции обновите ожидаемую версию и проверку view. Текущая версия readiness — 2, ей соответствуют три завершённые миграции. Integration создаёт пустой PostgreSQL, применяет все миграции, а отдельно проверяет последовательное обновление предыдущих схем с существующими данными.
+`runtime_schema` закрывает readiness при незавершённой/неизвестной версии миграций. При следующей миграции обновите ожидаемую версию и проверку view. Текущая версия readiness — 8, ей соответствуют девять завершённых миграций. Integration создаёт пустой PostgreSQL, применяет все миграции, а отдельно проверяет последовательное обновление предыдущих схем с существующими данными.
 
 ## HTTP и контейнеры
 
@@ -64,4 +66,4 @@ Nonce CSP кабинета не разрешает unsafe-inline scripts, соб
 
 ## Роли и приглашения
 
-[Контракт приглашений и mail worker](mail.md). Owner MFA обязателен; остальные могут включить MFA с паролем и первым TOTP. Включение выдаёт десять recovery codes и отзывает сессии. Отключение добровольного MFA требует пароль и TOTP/recovery, уничтожает credential/recovery и отзывает сессии. Повышение до Owner требует активный MFA; последний активный Owner защищён от отключения и понижения общей блокировкой workspace при параллельных изменениях.
+[Контракт ручных приглашений и переходной почтовой инфраструктуры](mail.md). Owner после свежего password + TOTP step-up получает одноразовую 24-часовую ссылку и передаёт её через доверенный канал. Новый Account, обязательный active TOTP, десять recovery hashes, Member и TeamMember создаются одной транзакцией после первого кода. MFA нельзя отключить через интерфейс или публичный API. Последний активный Owner защищён от отключения и понижения общей блокировкой workspace при параллельных изменениях.

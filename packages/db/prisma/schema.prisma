@@ -167,6 +167,7 @@ model Invitation {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   acceptedAt DateTime? @db.Timestamptz(3)
   teams InvitationTeam[]
+  enrollment InvitationEnrollment?
   verifications InvitationVerification[]
   mail MailOutbox[]
   @@index([organizationId, createdAt])
@@ -178,6 +179,20 @@ model InvitationTeam {
   invitation Invitation @relation(fields:[invitationId], references:[id], onDelete:Cascade)
   @@id([invitationId,teamId])
   @@map("invitation_team")
+}
+model InvitationEnrollment {
+  id String @id
+  invitationId String @unique
+  revision Int
+  tokenHash String @unique
+  name String
+  passwordHash String
+  pendingCiphertext String
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  invitation Invitation @relation(fields:[invitationId], references:[id], onDelete:Cascade)
+  @@index([expiresAt])
+  @@map("invitation_enrollment")
 }
 model InvitationVerification {
   id String @id

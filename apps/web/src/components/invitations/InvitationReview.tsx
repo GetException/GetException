@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { post } from "../forms/utils";
 import { Form } from "../forms/Form";
 import { LoginForm } from "../forms/LoginForm";
+import { RegistrationForm } from "./RegistrationForm";
 import { useFragmentToken } from "./useFragmentToken";
 
 type Preview = {
@@ -21,7 +22,6 @@ export function InvitationReview() {
   const requested = useRef(false);
   const [preview, setPreview] = useState<Preview>();
   const [error, setError] = useState("");
-  const [sent, setSent] = useState(false);
 
   useEffect(() => {
     if (!token || requested.current) {
@@ -48,7 +48,7 @@ export function InvitationReview() {
     return (
       <p role="alert" className="alert">
         {error ||
-          "Open the invitation link from your email. If you refreshed this page, open the link again."}
+          "Open the personal invitation link again. Ask your Owner to reissue it if it has expired."}
       </p>
     );
   }
@@ -65,28 +65,13 @@ export function InvitationReview() {
         <strong>{preview.role}</strong>.
       </p>
       <p>Teams: {preview.teams.join(", ")}</p>
-      {sent ? (
-        <p className="success" role="status">
-          Check your email for a separate confirmation link. Open it to set your
-          name and password.
-        </p>
-      ) : (
-        <Form
-          button="Create an account · verify email"
-          submit={async () => {
-            await post("/api/invitations/send-verification", { token });
-            setSent(true);
-          }}
-        >
-          <p className="muted small">
-            Confirm ownership of your email before choosing a password.
-          </p>
-        </Form>
-      )}
+      <RegistrationForm token={token ?? ""} />
       <details className="invite-existing">
         <summary>Already have an account?</summary>
         <p className="muted small">
-          Sign in with the email this invitation was sent to.
+          Sign in with the email assigned to this invitation. If this account
+          still needs an authenticator, finish that setup and open the
+          invitation link again.
         </p>
         <LoginForm onSuccess={accept} />
         <Form button="Accept with my signed-in account" submit={accept}>

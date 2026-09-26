@@ -49,7 +49,7 @@ export class AuthService {
       | "team_update"
       | "member_update"
       | "invitation_create"
-      | "invitation_resend"
+      | "invitation_reissue"
       | "invitation_revoke"
       | "invitation_accept"
       | "mfa_enable"
@@ -382,6 +382,31 @@ export class AuthService {
     }
   }
 
+  private async prepareMfaEnrollment(tx: Transaction, userId: string) {
+    const secret = newTotpSecret();
+    const data = {
+      ciphertext: encryptSecret(
+        secret,
+        userId,
+        "pending",
+        this.config.TOTP_ENCRYPTION_KEY,
+      ),
+      expiresAt: new Date(Date.now() + 15 * 60_000),
+      lastCounter: -1n,
+    };
+
+    await tx.mfaCredential.upsert({
+      where: { userId_state: { userId, state: "pending" } },
+      create: {
+        id: randomUUID(),
+        userId,
+        state: "pending",
+        ...data,
+      },
+      update: data,
+    });
+  }
+
   async login(input: unknown, ip: string) {
     const data = loginSchema.parse(input);
 
@@ -400,28 +425,24 @@ export class AuthService {
           throw new AuthError();
         }
 
-        const owner = fresh.members.some((member) => member.role === "owner");
-
-        if (owner && !fresh.twoFactorEnabled) {
-          throw new AuthError();
-        }
-
         if (fresh.twoFactorEnabled) {
           await this.consumeFactor(tx, user.id, data.code, data.recoveryCode);
+        } else {
+          await this.prepareMfaEnrollment(tx, user.id);
         }
 
         const method = fresh.twoFactorEnabled
           ? data.recoveryCode
             ? "recovery"
             : "totp"
-          : "password";
+          : "enrollment";
         const context = await createIdentity(tx, this.config).$context;
         const session = await runWithAdapter(context.adapter, () =>
           context.internalAdapter.createSession(
             user.id,
             false,
             {
-              mfaVerifiedAt: method === "password" ? null : new Date(),
+              mfaVerifiedAt: method === "enrollment" ? null : new Date(),
               mfaMethod: method,
               lastSeenAt: new Date(),
               ipAddress: null,
@@ -437,23 +458,65 @@ export class AuthService {
 
         await this.audit(
           tx,
-          method === "password" ? "password" : method,
+          method === "enrollment" ? "password" : method,
           true,
           user.id,
         );
 
-        return { user, session };
+        return {
+          user,
+          session,
+          enrollmentRequired: method === "enrollment",
+        };
       });
     } catch (error) {
-      await this.audit(
-        this.db,
-        data.recoveryCode ? "recovery" : "totp",
-        false,
-        user.id,
-      );
+      if (user.twoFactorEnabled) {
+        await this.audit(
+          this.db,
+          data.recoveryCode ? "recovery" : "totp",
+          false,
+          user.id,
+        );
+      }
 
       throw error;
     }
+  }
+
+  async authenticateEnrollment(headers: Headers) {
+    const found = await createIdentity(this.db, this.config).api.getSession({
+      headers,
+    });
+
+    if (!found) {
+      throw new AuthError(401);
+    }
+
+    const [user, session] = await Promise.all([
+      this.db.user.findUnique({
+        where: { id: found.user.id },
+        include: { members: { where: { active: true } } },
+      }),
+      this.db.session.findUnique({ where: { id: found.session.id } }),
+    ]);
+    const now = Date.now();
+
+    if (
+      !user ||
+      user.disabled ||
+      user.twoFactorEnabled ||
+      !user.emailVerified ||
+      !user.members.length ||
+      !session ||
+      session.mfaMethod !== "enrollment" ||
+      session.mfaVerifiedAt ||
+      session.expiresAt.getTime() <= now ||
+      now - session.createdAt.getTime() > 15 * 60_000
+    ) {
+      throw new AuthError(401);
+    }
+
+    return { user, session };
   }
 
   async authenticate(headers: Headers) {
@@ -473,7 +536,6 @@ export class AuthService {
       this.db.session.findUnique({ where: { id: found.session.id } }),
     ]);
     const now = Date.now();
-    const owner = user?.members.some((member) => member.role === "owner");
 
     if (
       !user ||
@@ -483,10 +545,9 @@ export class AuthService {
       session.expiresAt.getTime() <= now ||
       now - session.createdAt.getTime() > 8 * 3600_000 ||
       now - session.lastSeenAt.getTime() > 30 * 60_000 ||
-      (owner && !user.twoFactorEnabled) ||
-      ((owner || user.twoFactorEnabled) &&
-        (!session.mfaVerifiedAt ||
-          !["totp", "recovery"].includes(session.mfaMethod ?? "")))
+      !user.twoFactorEnabled ||
+      !session.mfaVerifiedAt ||
+      !["totp", "recovery"].includes(session.mfaMethod ?? "")
     ) {
       throw new AuthError(401);
     }

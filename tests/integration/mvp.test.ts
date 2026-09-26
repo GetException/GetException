@@ -718,6 +718,7 @@ describe("durable inbox and separate SQL roles", () => {
         diagnostics,
         releaseContext,
         sourceMapPolicy,
+        manualInvitations,
       ] = migrationFiles();
 
       await upgrade.query(initial!);
@@ -892,6 +893,31 @@ describe("durable inbox and separate SQL roles", () => {
         (await upgrade.query("SELECT count(*) FROM source_map_token")).rows[0]
           ?.count,
       ).toBe("0");
+      await upgrade.query(manualInvitations!);
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rowCount,
+      ).toBe(0);
+      await upgrade.query(
+        "INSERT INTO _prisma_migrations(finished_at) VALUES (now())",
+      );
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
+          ?.version,
+      ).toBe(8);
+      expect(
+        (
+          await upgrade.query(
+            "SELECT has_table_privilege('getexception_web', 'invitation_enrollment', 'INSERT') AS allowed",
+          )
+        ).rows[0]?.allowed,
+      ).toBe(true);
+      expect(
+        (
+          await upgrade.query(
+            "SELECT has_table_privilege('getexception_worker', 'invitation_enrollment', 'SELECT') AS allowed",
+          )
+        ).rows[0]?.allowed,
+      ).toBe(false);
       expect(
         (await upgrade.query('SELECT name, enabled, "deletedAt" FROM project'))
           .rows,

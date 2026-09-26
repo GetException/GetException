@@ -111,14 +111,16 @@ export async function safeRoute(fn: () => Promise<Response>) {
         "The main repository is already included. Add only additional forks.",
       source_map_gitlab_managed:
         "This project uses GitLab build authentication. Permanent upload tokens are disabled.",
-      mail_disabled:
-        "Invitations are unavailable while email delivery is disabled. Contact your server administrator.",
+      account_exists:
+        "An account already uses this email. Sign in below to accept the invitation.",
       member_exists:
         "This email already belongs to a member. Edit their access in Members.",
       invitation_pending:
-        "An invitation is already pending for this email. Resend or revoke it in Members.",
+        "An invitation is already pending for this email. Reissue or revoke it in Members.",
       invitation_email:
-        "Sign in with the email address this invitation was sent to.",
+        "Sign in with the email address assigned to this invitation.",
+      mfa_enrollment_expired:
+        "Authenticator setup expired. Sign in again to restart it.",
       last_owner: "The workspace must keep at least one active Owner.",
       owner_mfa:
         "This member must enable an authenticator in Settings before becoming an Owner.",

@@ -16,7 +16,7 @@ export default async function MembersPage({
   searchParams: Promise<Search>;
 }) {
   const { member } = await dashboardOwner();
-  const { db, config } = getRuntime();
+  const { db } = getRuntime();
   const search = await searchParams;
   const q = textParam(search.q);
   const page = pageNumber(search.page);
@@ -74,7 +74,6 @@ export default async function MembersPage({
         role: true,
         status: true,
         expiresAt: true,
-        mail: { select: { kind: true, status: true } },
       },
     }),
   ]);
@@ -164,27 +163,14 @@ export default async function MembersPage({
         )}
         <Pagination path="/members" values={{ q }} page={page} total={total} />
       </section>
-      <InvitationList
-        invitations={invitations}
-        mailEnabled={config.MAIL_ENABLED}
-      />
+      <InvitationList invitations={invitations} />
       <section className="panel form-panel" id="invite">
         <h2>Invite a teammate</h2>
-        {config.MAIL_ENABLED ? (
-          <>
-            <p className="muted security-intro">
-              Choose their role and teams. Confirm your identity in Settings if
-              prompted.
-            </p>
-            <InvitationForm teams={teams} />
-          </>
-        ) : (
-          <p className="content-note">
-            Invitations are unavailable while email delivery is disabled.
-            Contact your server administrator to enable it. Your account and
-            projects are available as usual.
-          </p>
-        )}
+        <p className="muted security-intro">
+          Choose their role and teams. After identity confirmation, copy the
+          one-time link and send it through a trusted private channel.
+        </p>
+        <InvitationForm teams={teams} />
       </section>
     </div>
   );

@@ -19,7 +19,7 @@ export function LoginForm({
       submit={async (data) => {
         const factor = String(data.get("factor") ?? "").trim();
 
-        await post("/api/auth/login", {
+        const result = await post("/api/auth/login", {
           email: data.get("email"),
           password: data.get("password"),
           ...(factor
@@ -29,6 +29,13 @@ export function LoginForm({
             : {}),
           trustDevice: false,
         });
+
+        if (result.enrollmentRequired) {
+          router.push("/two-factor");
+          router.refresh();
+
+          return;
+        }
 
         if (onSuccess) {
           await onSuccess();
@@ -54,7 +61,7 @@ export function LoginForm({
         autoComplete="current-password"
       />
       <Control
-        label={recovery ? "Recovery code" : "Authenticator code · if enabled"}
+        label={recovery ? "Recovery code" : "Authenticator code"}
         name="factor"
         autoComplete="one-time-code"
         maxLength={recovery ? 32 : 6}

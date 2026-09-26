@@ -1,5 +1,3 @@
-import { MfaEnrollment } from "../../../components/forms/MfaEnrollment";
-import { MfaDisableForm } from "../../../components/forms/MfaDisableForm";
 import { dashboardUser } from "../../../server/dashboard";
 import { getRuntime } from "../../../server/runtime";
 import { Heading } from "../../../components/dashboard/Heading";
@@ -30,10 +28,6 @@ export default async function SettingsPage() {
               <h2>Workspace</h2>
             </div>
             <dl className="settings-list">
-              <div>
-                <dt>Email delivery</dt>
-                <dd>{config.MAIL_ENABLED ? "Enabled" : "Disabled"}</dd>
-              </div>
               <div>
                 <dt>Name</dt>
                 <dd>{workspace.name}</dd>
@@ -82,9 +76,7 @@ export default async function SettingsPage() {
                 <dd
                   className={user.twoFactorEnabled ? "success-text" : undefined}
                 >
-                  {user.twoFactorEnabled
-                    ? "Enabled · Authenticator app"
-                    : "Not enabled"}
+                  Enabled · Authenticator app
                 </dd>
               </div>
               <div>
@@ -105,27 +97,16 @@ export default async function SettingsPage() {
         <section className="panel form-panel" id="security">
           <span className="eyebrow">ACCOUNT SECURITY</span>
           <h2>
-            {user.twoFactorEnabled
-              ? member.role === "owner"
-                ? "Confirm your identity"
-                : "Authenticator enabled"
-              : "Protect your account"}
+            {member.role === "owner"
+              ? "Confirm your identity"
+              : "Authenticator enabled"}
           </h2>
           <p className="muted security-intro">
-            {user.twoFactorEnabled
-              ? member.role === "owner"
-                ? "Confirm your password and a new authenticator code before changing projects, invitations or access. Confirmation lasts five minutes."
-                : "Enter your authenticator code when signing in. If you lose access to it, use one of your saved recovery codes. Each recovery code works once."
-              : "An authenticator adds a second factor to your password. It is required before an Owner can promote you to Owner."}
+            {member.role === "owner"
+              ? "Confirm your password and a new authenticator code before changing projects, invitations or access. Confirmation lasts five minutes."
+              : "Enter your authenticator code when signing in. If you lose access to it, use one of your saved recovery codes. Each recovery code works once."}
           </p>
-          {member.role === "owner" ? (
-            <StepUpForm />
-          ) : (
-            !user.twoFactorEnabled && <MfaEnrollment />
-          )}
-          {member.role !== "owner" && user.twoFactorEnabled && (
-            <MfaDisableForm />
-          )}
+          {member.role === "owner" && <StepUpForm />}
         </section>
       </div>
     </div>
