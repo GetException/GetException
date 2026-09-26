@@ -2,9 +2,13 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { setTimeout } from "node:timers/promises";
 import { stringify } from "yaml";
 import { registryConsumerConfig } from "./consumer-config";
+import {
+  lookupPublishedPackage,
+  type PublishedPackage,
+  waitForPublishedPackages,
+} from "./registry-metadata";
 
 const names = ["browser", "react", "cli"] as const;
 const root = resolve(".artifacts/registry");
@@ -24,25 +28,6 @@ function yarn(args: string[], cwd = process.cwd()) {
   if (result.status !== 0) {
     throw new Error("Release package command failed");
   }
-}
-
-async function lookup(name: string) {
-  const response = await fetch(
-    `https://registry.npmjs.org/@getexception%2f${name}/${version}`,
-    { signal: AbortSignal.timeout(20_000) },
-  );
-
-  if (response.status === 404) {
-    return undefined;
-  }
-
-  if (!response.ok) {
-    throw new Error("npm registry metadata is unavailable");
-  }
-
-  return (await response.json()) as {
-    dist: { tarball: string; integrity: string };
-  };
 }
 
 for (const name of names) {
@@ -68,10 +53,21 @@ for (const name of names) {
   }
 }
 
-for (const name of names) {
-  let published = await lookup(name);
+const published = new Map<string, PublishedPackage>();
+const missing: string[] = [];
 
-  if (publish && !published) {
+for (const name of names) {
+  const metadata = await lookupPublishedPackage(name, version, 0);
+
+  if (metadata) {
+    published.set(name, metadata);
+  } else {
+    missing.push(name);
+  }
+}
+
+if (publish) {
+  for (const name of missing) {
     yarn([
       "workspace",
       `@getexception/${name}`,
@@ -82,17 +78,26 @@ for (const name of names) {
       "--provenance",
     ]);
   }
+}
 
-  for (let attempt = 0; !published && attempt < 30; attempt++) {
-    await setTimeout(5000);
-    published = await lookup(name);
+if (missing.length) {
+  const appeared = await waitForPublishedPackages(missing, (name, attempt) =>
+    lookupPublishedPackage(name, version, attempt),
+  );
+
+  for (const [name, metadata] of appeared) {
+    published.set(name, metadata);
+  }
+}
+
+for (const name of names) {
+  const metadata = published.get(name);
+
+  if (!metadata) {
+    throw new Error(`Published SDK metadata is missing: ${name}`);
   }
 
-  if (!published) {
-    throw new Error("Published SDK did not appear in npm within the deadline");
-  }
-
-  const url = new URL(published.dist.tarball);
+  const url = new URL(metadata.dist.tarball);
 
   if (url.protocol !== "https:" || url.hostname !== "registry.npmjs.org") {
     throw new Error("Unexpected npm tarball host");
@@ -107,7 +112,7 @@ for (const name of names) {
   const archive = Buffer.from(await response.arrayBuffer());
   const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
 
-  if (integrity !== published.dist.integrity) {
+  if (integrity !== metadata.dist.integrity) {
     throw new Error("Published SDK integrity check failed");
   }
 
