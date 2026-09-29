@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button } from "@base-ui/react/button";
+import { CopyButton } from "../forms/CopyButton";
 
 export function InvitationLink({
   token,
@@ -11,8 +11,6 @@ export function InvitationLink({
   expiresAt: string;
 }) {
   const [link, setLink] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState(false);
 
   useEffect(() => {
     setLink(`${window.location.origin}/invite#${token}`);
@@ -30,27 +28,7 @@ export function InvitationLink({
       <code className="secret" data-private data-testid="invitation-link">
         {link || "Preparing link…"}
       </code>
-      <Button
-        type="button"
-        className="button primary"
-        disabled={!link}
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(link);
-            setCopied(true);
-            setCopyError(false);
-          } catch {
-            setCopyError(true);
-          }
-        }}
-      >
-        {copied ? "Copied" : "Copy invitation link"}
-      </Button>
-      {copyError && (
-        <p className="action-error" role="alert">
-          Copy failed. Select the link above and copy it manually.
-        </p>
-      )}
+      <CopyButton value={link} label="Copy invitation link" />
     </div>
   );
 }

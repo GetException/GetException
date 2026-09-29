@@ -1,8 +1,18 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { totp } from "../../apps/web/src/server/crypto";
+
+async function fillOtp(page: Page, code: string) {
+  const cells = page
+    .getByRole("group", { name: "Authenticator code" })
+    .locator("input.otp-cell");
+
+  for (let index = 0; index < code.length; index += 1) {
+    await cells.nth(index).fill(code[index]!);
+  }
+}
 
 test("installed release: setup, real SDK events and preserved login", async ({
   browser,
@@ -56,18 +66,15 @@ test("installed release: setup, real SDK events and preserved login", async ({
     await page.getByRole("button", { name: "Set up authenticator" }).click();
     const secret = (await (await prepared).json()).secret as string;
 
-    await page
-      .getByLabel("Authenticator code")
-      .fill(totp(secret, BigInt(Math.floor(Date.now() / 30_000)) - 1n));
-    await page.getByRole("button", { name: "Activate installation" }).click();
+    await fillOtp(
+      page,
+      totp(secret, BigInt(Math.floor(Date.now() / 30_000)) - 1n),
+    );
     await page.getByRole("link", { name: /I saved my codes/ }).click();
     phase = "login";
     await page.getByLabel("Email", { exact: true }).fill(email);
     await page.getByLabel("Password", { exact: true }).fill(password);
-    await page
-      .getByLabel("Authenticator code")
-      .fill(totp(secret, BigInt(Math.floor(Date.now() / 30_000))));
-    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await fillOtp(page, totp(secret, BigInt(Math.floor(Date.now() / 30_000))));
     await expect(
       page.getByRole("heading", { name: "Overview." }),
     ).toBeVisible();

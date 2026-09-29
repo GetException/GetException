@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { LoginForm } from "../../components/forms/LoginForm";
+import { AuthShell } from "../../components/forms/AuthShell";
 import { getRuntime } from "../../server/runtime";
 
 export const dynamic = "force-dynamic";
@@ -14,46 +15,24 @@ export default async function LoginPage({
   }
 
   return (
-    <main className="auth-shell">
-      <div className="auth-intro">
-        <a href="/login" className="brand">
-          <span className="brand-icon">∴</span>GetException
-        </a>
-        <div>
-          <span className="eyebrow">LESS NOISE. MORE CLARITY.</span>
-          <h1>
-            Find the cause.
-            <br />
-            Move forward.
-          </h1>
-          <p>
-            Your applications deserve
-            <br />a little peace of mind.
-          </p>
-        </div>
-        <span className="muted small">Private by design.</span>
-      </div>
-      <section className="auth-panel">
-        <span className="eyebrow">YOUR WORKSPACE</span>
-        <h2>Welcome back</h2>
-        <p className="muted">
-          Sign in with your password and a current authenticator code. Existing
-          accounts without an authenticator will set one up after the password
-          is verified.
+    <AuthShell>
+      <h1>Sign in</h1>
+      <p className="muted">
+        Enter your login email, password and the current code from your
+        authenticator.
+      </p>
+      {(await searchParams).registered === "1" && (
+        <p role="status">
+          Your account is ready. Sign in to open your workspace.
         </p>
-        {(await searchParams).registered === "1" && (
-          <p role="status">
-            Your account is ready. Sign in to open your workspace.
-          </p>
-        )}
-        <LoginForm />
-        {(await searchParams).access === "inactive" && (
-          <p role="alert" className="alert">
-            Your account has no active workspace access. Ask an Owner to
-            activate your membership, or open your invitation link to join.
-          </p>
-        )}
-      </section>
-    </main>
+      )}
+      <LoginForm />
+      {(await searchParams).access === "inactive" && (
+        <p role="alert" className="alert">
+          Your account has no active workspace access. Ask an Owner to activate
+          your membership, or open your invitation link to join.
+        </p>
+      )}
+    </AuthShell>
   );
 }

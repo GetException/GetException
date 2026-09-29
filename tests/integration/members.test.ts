@@ -275,6 +275,49 @@ describe("manual invitations", () => {
     });
   });
 
+  it("starts an authenticated session when a new account finishes registration", async () => {
+    const invitation = await invite("signed-in@example.test");
+    const enrollment = await invitations.beginRegistration(
+      invitation.value,
+      { name: "Signed in", password },
+      "browser",
+    );
+    const runtime = createRuntime(service.config, web);
+    const response = await runtime.auth.handler(
+      new Request(
+        service.config.DASHBOARD_ORIGIN +
+          "/api/auth/invitation/finish-registration",
+        {
+          method: "POST",
+          headers: {
+            Origin: service.config.DASHBOARD_ORIGIN,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            enrollment: enrollment.enrollmentToken,
+            code: totp(enrollment.secret, period()),
+          }),
+        },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      recoveryCodes: expect.any(Array),
+    });
+    const responseCookies = response.headers.getSetCookie();
+    const sessionCookie = responseCookies.find((value) =>
+      value.startsWith("__Secure-__Host-getexception.session="),
+    );
+
+    expect(
+      responseCookies.map((value) => value.slice(0, value.indexOf("="))),
+    ).toContain("__Secure-__Host-getexception.session");
+    await expect(
+      service.authorize(new Headers({ Cookie: sessionCookie!.split(";")[0]! })),
+    ).resolves.toMatchObject({ member: { role: "developer" } });
+  });
+
   it("reissues one-time links, invalidates pending enrollment and revokes access", async () => {
     const invitation = await invite("viewer@example.test", "viewer");
     const enrollment = await invitations.beginRegistration(

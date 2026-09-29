@@ -35,7 +35,9 @@ export async function requestMutation(
           ? "Too many attempts. Try again in five minutes."
           : typeof data.error === "string"
             ? data.error
-            : "Unable to complete the request. Check your details and try again.",
+            : typeof data.message === "string"
+              ? data.message
+              : "Unable to complete the request. Check your details and try again.",
     );
   }
 

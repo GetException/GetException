@@ -3,6 +3,7 @@ import { getRuntime } from "../../../../server/runtime";
 import { InvitationService } from "../../../../server/invitations/service";
 import {
   beginRegistrationInput,
+  codeInput,
   ENROLLMENT_COOKIE,
   ENROLLMENT_TTL,
   tokenInput,
@@ -49,15 +50,20 @@ export async function POST(
     if (action === "finish-registration") {
       const jar = await cookies();
       const enrollment = jar.get(ENROLLMENT_COOKIE)?.value ?? "";
-      const result = await invitations.finishRegistration(
-        enrollment,
-        input,
-        ip,
+      const { code } = codeInput.parse(input);
+      const target = new URL(request.url);
+      const headers = new Headers(request.headers);
+
+      target.pathname = "/api/auth/invitation/finish-registration";
+      headers.delete("content-length");
+
+      return getRuntime().auth.handler(
+        new Request(target, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ code, enrollment }),
+        }),
       );
-
-      jar.delete(ENROLLMENT_COOKIE);
-
-      return json(result);
     }
 
     const { token } = tokenInput.parse(input);

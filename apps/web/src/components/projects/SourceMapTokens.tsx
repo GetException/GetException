@@ -6,6 +6,7 @@ import { Form } from "../forms/Form";
 import { StepUpForm } from "../forms/StepUpForm";
 import { useProjectMutation } from "./use-project-mutation";
 import { dateTime } from "../../lib/format";
+import { CopyButton } from "../forms/CopyButton";
 
 export function SourceMapTokens({
   projectId,
@@ -41,6 +42,7 @@ export function SourceMapTokens({
         <div className="upload-token-notice" role="status">
           <strong>Save this token in your CI secrets. It is shown once.</strong>
           <pre className="mono">{secret}</pre>
+          <CopyButton value={secret} label="Copy token" />
         </div>
       )}
       {!gitlabManaged && (

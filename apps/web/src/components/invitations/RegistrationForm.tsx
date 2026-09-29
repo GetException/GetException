@@ -4,9 +4,13 @@ import { useState } from "react";
 import { Form } from "../forms/Form";
 import { Control } from "../forms/Control";
 import { post } from "../forms/utils";
+import { AuthenticatorSetup } from "../forms/AuthenticatorSetup";
+import { OtpInput } from "../forms/OtpInput";
+import { RecoveryCodes } from "../forms/RecoveryCodes";
 
 export function RegistrationForm({ token }: { token: string }) {
   const [secret, setSecret] = useState("");
+  const [uri, setUri] = useState("");
   const [codes, setCodes] = useState<string[]>([]);
 
   if (codes.length) {
@@ -17,13 +21,9 @@ export function RegistrationForm({ token }: { token: string }) {
           Your account is ready. Store these one-time codes outside
           GetException; they will not be shown again.
         </p>
-        <div className="recovery-grid" data-private>
-          {codes.map((code) => (
-            <code key={code}>{code}</code>
-          ))}
-        </div>
-        <a href="/login?registered=1" className="button primary">
-          I saved my codes · Sign in ↗
+        <RecoveryCodes codes={codes} />
+        <a href="/" className="button primary">
+          I saved my codes · Open workspace ↗
         </a>
       </div>
     );
@@ -47,16 +47,8 @@ export function RegistrationForm({ token }: { token: string }) {
           its current six-digit code. Your account is created only after this
           check succeeds.
         </p>
-        <code className="secret" data-private>
-          {secret}
-        </code>
-        <Control
-          label="Authenticator code"
-          name="code"
-          minLength={6}
-          maxLength={6}
-          autoComplete="one-time-code"
-        />
+        <AuthenticatorSetup secret={secret} uri={uri} />
+        <OtpInput />
       </Form>
     );
   }
@@ -72,6 +64,7 @@ export function RegistrationForm({ token }: { token: string }) {
         });
 
         setSecret(result.secret);
+        setUri(result.uri);
       }}
     >
       <Control

@@ -6,6 +6,7 @@ import { Control } from "./Control";
 import { Form } from "./Form";
 import { useRouter } from "next/navigation";
 import { Button } from "@base-ui/react/button";
+import { OtpInput } from "./OtpInput";
 
 export function LoginForm({
   onSuccess,
@@ -60,13 +61,17 @@ export function LoginForm({
         maxLength={128}
         autoComplete="current-password"
       />
-      <Control
-        label={recovery ? "Recovery code" : "Authenticator code"}
-        name="factor"
-        autoComplete="one-time-code"
-        maxLength={recovery ? 32 : 6}
-        required={false}
-      />
+      {recovery ? (
+        <Control
+          label="Recovery code"
+          name="factor"
+          autoComplete="one-time-code"
+          maxLength={32}
+          required={false}
+        />
+      ) : (
+        <OtpInput name="factor" required={false} />
+      )}
       <Button
         className="text-button"
         type="button"

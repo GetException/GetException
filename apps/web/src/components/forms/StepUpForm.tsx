@@ -4,6 +4,7 @@ import { post } from "./utils";
 import { useState } from "react";
 import { Control } from "./Control";
 import { Form } from "./Form";
+import { OtpInput } from "./OtpInput";
 
 export function StepUpForm({ onSuccess }: { onSuccess?: () => void } = {}) {
   const [done, setDone] = useState(false);
@@ -33,12 +34,7 @@ export function StepUpForm({ onSuccess }: { onSuccess?: () => void } = {}) {
           type="password"
           autoComplete="current-password"
         />
-        <Control
-          label="New authenticator code"
-          name="code"
-          maxLength={6}
-          autoComplete="one-time-code"
-        />
+        <OtpInput label="New authenticator code" />
       </Form>
     </>
   );

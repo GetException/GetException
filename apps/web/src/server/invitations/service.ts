@@ -496,7 +496,26 @@ export class InvitationService {
         });
         await this.join(tx, invitation, user.id);
 
-        return { recoveryCodes: codes };
+        const session = await runWithAdapter(context.adapter, () =>
+          context.internalAdapter.createSession(
+            user.id,
+            false,
+            {
+              mfaVerifiedAt: new Date(),
+              mfaMethod: "totp",
+              lastSeenAt: new Date(),
+              ipAddress: null,
+              userAgent: null,
+            },
+            true,
+          ),
+        );
+
+        if (!session) {
+          throw new AuthError();
+        }
+
+        return { recoveryCodes: codes, user, session };
       },
       { timeout: 15_000 },
     );

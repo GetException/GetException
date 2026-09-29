@@ -349,7 +349,7 @@ Anonymous preview возвращает только название workspace, 
 
 Новый пользователь сначала передаёт имя и пароль и получает короткую enrollment session в `HttpOnly`, `Secure`, `SameSite=Strict` cookie. Пароль хранится только как Argon2 hash, pending TOTP secret шифруется. User, Account, Member и TeamMember ещё не существуют и доступ к dashboard отсутствует.
 
-Первый правильный TOTP-код блокирует invitation и enrollment, а затем одной транзакцией создаёт Account, active MFA credential, recovery-коды, Member и team memberships. Частичное принятие невозможно. Уникальные ограничения и смена состояния позволяют успешно завершиться только одному из параллельных запросов.
+Первый правильный TOTP-код блокирует invitation и enrollment, а затем одной транзакцией создаёт Account, active MFA credential, recovery-коды, Member, team memberships и полноценную auth session. Session cookie устанавливается сервером как `HttpOnly`, `Secure`, `SameSite=Strict`; тот же TOTP-код не проверяется повторно и остаётся отмеченным использованным. Частичное принятие невозможно. Уникальные ограничения и смена состояния позволяют успешно завершиться только одному из параллельных запросов.
 
 Перевыпуск создаёт новый token, меняет хеш, срок и revision, удаляя незавершённый enrollment. Отзыв переводит invitation в `revoked`. Старые ссылки бесполезны, потому что сервер повторно проверяет хеш, revision и состояние. Миграция очищает verification sessions и зашифрованные outbox payload прежнего email-flow.
 

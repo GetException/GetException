@@ -32,6 +32,10 @@ export const codeInput = z
   .object({ code: z.string().regex(/^\d{6}$/) })
   .strict();
 
+export const finishRegistrationInput = codeInput.extend({
+  enrollment: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
 export const INVITATION_TTL = 24 * 3600_000;
 
 export const ENROLLMENT_TTL = 15 * 60_000;

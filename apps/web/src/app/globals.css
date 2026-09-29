@@ -101,10 +101,12 @@ small,
   letter-spacing: -0.5px;
   white-space: nowrap;
 }
-.brand-icon {
-  font-size: 31px;
-  color: var(--accent);
-  line-height: 1;
+.logo-mark {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  fill: var(--accent);
+  display: block;
 }
 .dashboard-shell {
   display: flex;
@@ -195,14 +197,6 @@ small,
   margin-bottom: 12px;
   color: var(--foreground);
 }
-.live-dot {
-  display: inline-block;
-  background: var(--success);
-  border-radius: 50%;
-  width: 6px;
-  height: 6px;
-  margin-right: 6px;
-}
 .main-content {
   min-width: 0;
   flex: 1;
@@ -211,7 +205,7 @@ small,
   height: 78px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   border-bottom: 1px solid var(--border);
   padding: 0 40px;
   font-size: 12px;
@@ -219,14 +213,6 @@ small,
 }
 .topbar .muted {
   margin: 0 15px;
-}
-.top-badge {
-  font-size: 9px;
-  letter-spacing: 1.4px;
-  color: #a491d4;
-  border: 1px solid #3a304e;
-  border-radius: 4px;
-  padding: 5px 9px;
 }
 .page {
   padding: 38px 40px 60px;
@@ -472,41 +458,25 @@ td {
 }
 .auth-shell {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr;
   min-height: 100vh;
 }
-.auth-intro {
-  padding: 50px 60px;
-  background: radial-gradient(
-    ellipse at 10% 60%,
-    #262039 0%,
-    #14121c 40%,
-    #101115 80%
-  );
+.auth-header {
+  min-height: 84px;
+  padding: 0 48px;
   display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  border-right: 1px solid var(--border);
-}
-.auth-intro h1 {
-  font-size: clamp(38px, 4.3vw, 65px);
-  line-height: 1.09;
-  margin: 25px 0;
-  letter-spacing: -2.6px;
-}
-.auth-intro p {
-  color: #9792aa;
-  font-size: 16px;
-  line-height: 1.8;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  background: #101115;
 }
 .auth-panel {
-  margin: auto;
-  padding: 50px 45px;
+  margin: 0 auto;
+  padding: 64px 32px 80px;
   width: 100%;
-  max-width: 560px;
+  max-width: 540px;
 }
-.auth-panel h2 {
-  font-size: 27px;
+.auth-panel h1 {
+  font-size: 32px;
   margin-bottom: 15px;
 }
 .steps {
@@ -561,12 +531,72 @@ textarea::placeholder {
   border-radius: 6px;
   font-size: 12px;
 }
+.generated-value {
+  display: grid;
+  gap: 10px;
+}
 .recovery-grid {
   display: grid;
   gap: 7px;
   font-size: 11px;
   padding: 15px;
   background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.copy-button {
+  justify-self: start;
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+.copy-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+.authenticator-setup {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.authenticator-qr {
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  border-radius: 6px;
+  background: #fff;
+}
+.authenticator-qr svg {
+  display: block;
+  width: 176px;
+  height: 176px;
+}
+.authenticator-key {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.authenticator-key .secret {
+  margin: 0;
+}
+.otp-input {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(38px, 1fr));
+  gap: 9px;
+  max-width: 360px;
+}
+input.otp-cell {
+  min-width: 0;
+  height: 54px;
+  padding: 0;
+  text-align: center;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  caret-color: var(--accent);
 }
 .alert {
   color: var(--danger);
@@ -651,9 +681,6 @@ textarea::placeholder {
   .section-heading form {
     display: flex;
   }
-  .auth-intro {
-    padding: 35px;
-  }
 }
 @media (max-width: 720px) {
   .sidebar {
@@ -682,9 +709,6 @@ textarea::placeholder {
     padding: 0 20px;
     height: 65px;
   }
-  .top-badge {
-    display: none;
-  }
   .page {
     padding: 25px 16px;
   }
@@ -702,19 +726,25 @@ textarea::placeholder {
     padding: 17px;
     flex-wrap: wrap;
   }
-  .auth-shell {
-    grid-template-columns: 1fr;
-  }
-  .auth-intro {
-    padding: 22px 28px;
-    border: 0;
-  }
-  .auth-intro > div,
-  .auth-intro > span {
-    display: none;
+  .auth-header {
+    min-height: 70px;
+    padding: 0 24px;
   }
   .auth-panel {
-    padding: 32px 28px;
+    padding: 40px 24px 64px;
+  }
+  .authenticator-setup {
+    grid-template-columns: 1fr;
+  }
+  .authenticator-qr {
+    justify-self: start;
+  }
+  .otp-input {
+    gap: 6px;
+  }
+  input.otp-cell {
+    height: 48px;
+    font-size: 19px;
   }
   .event-details {
     padding-inline: 15px;

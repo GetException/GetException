@@ -4,6 +4,9 @@ import { post } from "./utils";
 import { useState } from "react";
 import { Control } from "./Control";
 import { Form } from "./Form";
+import { AuthenticatorSetup } from "./AuthenticatorSetup";
+import { OtpInput } from "./OtpInput";
+import { RecoveryCodes } from "./RecoveryCodes";
 
 export function SetupForm({
   access,
@@ -14,6 +17,7 @@ export function SetupForm({
 }) {
   const [stage, setStage] = useState(access ? 1 : 0);
   const [secret, setSecret] = useState("");
+  const [uri, setUri] = useState("");
   const [codes, setCodes] = useState<string[]>([]);
 
   return (
@@ -56,6 +60,7 @@ export function SetupForm({
             });
 
             setSecret(result.secret);
+            setUri(result.uri);
             setStage(2);
           }}
         >
@@ -102,16 +107,8 @@ export function SetupForm({
             Add this key to your authenticator as a time-based account. Enter
             its first six-digit code to finish setup.
           </p>
-          <code className="secret" data-private>
-            {secret}
-          </code>
-          <Control
-            label="Authenticator code"
-            name="code"
-            autoComplete="one-time-code"
-            minLength={6}
-            maxLength={6}
-          />
+          <AuthenticatorSetup secret={secret} uri={uri} />
+          <OtpInput />
         </Form>
       )}
       {stage === 3 && (
@@ -120,11 +117,7 @@ export function SetupForm({
             Save these recovery codes somewhere safe. Each code works once. They
             will never be shown again.
           </p>
-          <div className="recovery-grid" data-private>
-            {codes.map((code) => (
-              <code key={code}>{code}</code>
-            ))}
-          </div>
+          <RecoveryCodes codes={codes} />
           <p className="muted small">
             For sign-in, wait for your authenticator to show a new code.
           </p>

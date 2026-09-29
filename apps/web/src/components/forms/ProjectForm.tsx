@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Form } from "./Form";
 import { ProjectFields } from "../projects/ProjectFields";
 import { projectFormValues } from "../projects/project-form-values";
+import { CopyButton } from "./CopyButton";
 
 export function ProjectForm() {
   const [dsn, setDsn] = useState("");
@@ -21,6 +22,7 @@ export function ProjectForm() {
         <code className="secret" data-private data-testid="project-dsn">
           {dsn}
         </code>
+        <CopyButton value={dsn} label="Copy DSN" />
         <a className="button primary" href="/issues">
           Open issues ↗
         </a>

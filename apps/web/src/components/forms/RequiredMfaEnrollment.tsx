@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Control } from "./Control";
 import { Form } from "./Form";
 import { post } from "./utils";
+import { AuthenticatorSetup } from "./AuthenticatorSetup";
+import { OtpInput } from "./OtpInput";
+import { RecoveryCodes } from "./RecoveryCodes";
 
 export function RequiredMfaEnrollment() {
   const requested = useRef(false);
   const [secret, setSecret] = useState("");
+  const [uri, setUri] = useState("");
   const [codes, setCodes] = useState<string[]>([]);
   const [error, setError] = useState("");
 
@@ -18,7 +21,10 @@ export function RequiredMfaEnrollment() {
 
     requested.current = true;
     void post("/api/mfa/enrollment/details", {})
-      .then((result) => setSecret(result.secret))
+      .then((result) => {
+        setSecret(result.secret);
+        setUri(result.uri);
+      })
       .catch((error) =>
         setError(
           error instanceof Error
@@ -36,11 +42,7 @@ export function RequiredMfaEnrollment() {
           Each code works once. Store them outside GetException; they will not
           be shown again.
         </p>
-        <div className="recovery-grid" data-private>
-          {codes.map((code) => (
-            <code key={code}>{code}</code>
-          ))}
-        </div>
+        <RecoveryCodes codes={codes} />
         <a href="/login" className="button primary">
           I saved my codes · Sign in ↗
         </a>
@@ -76,16 +78,8 @@ export function RequiredMfaEnrollment() {
         Add this key to Google Authenticator or another TOTP app, then enter its
         current six-digit code.
       </p>
-      <code className="secret" data-private>
-        {secret}
-      </code>
-      <Control
-        name="code"
-        label="Authenticator code"
-        minLength={6}
-        maxLength={6}
-        autoComplete="one-time-code"
-      />
+      <AuthenticatorSetup secret={secret} uri={uri} />
+      <OtpInput />
     </Form>
   );
 }
