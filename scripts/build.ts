@@ -2,14 +2,19 @@ import { build } from "tsup";
 import { spawnSync } from "node:child_process";
 
 await build({
-  entry: ["packages/cli/src/index.ts"],
+  entry: {
+    index: "packages/cli/src/index.ts",
+    integration: "packages/cli/src/integration.ts",
+  },
   outDir: "packages/cli/dist",
   format: ["esm"],
   platform: "node",
   target: "node20",
   dts: true,
   clean: true,
+  splitting: false,
   sourcemap: false,
+  external: ["acorn", "postcss"],
   noExternal: ["@getexception/protocol", "zod"],
 });
 

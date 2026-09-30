@@ -164,6 +164,11 @@ if (!publish) {
   yarn(["node", "aliases.mjs"], root);
 
   yarn(["exec", "getexception", "--help"], root);
+  writeFileSync(
+    resolve(root, "integration.mjs"),
+    'import { deployWithGetException, assertPublicOutput } from "@getexception/cli/integration"; if (typeof deployWithGetException !== "function" || typeof assertPublicOutput !== "function") throw Error("Published CLI integration is unavailable");',
+  );
+  yarn(["node", "integration.mjs"], root);
 
   for (const name of ["browser", "react"]) {
     cpSync(`fixtures/${name}-spa`, resolve(root, `${name}-spa`), {

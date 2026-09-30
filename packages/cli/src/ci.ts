@@ -10,12 +10,10 @@ export async function buildContext(
   transport: typeof fetch = fetch,
 ) {
   const result = ciContextSchema.safeParse(
-    await projectApi(
-      address,
-      project,
-      credential,
-      transport,
-    )("/ci?version=2", "POST"),
+    await projectApi(address, project, credential, transport, {
+      deadlineMs: 10_000,
+      requestTimeoutMs: 10_000,
+    })("/ci?version=2", "POST"),
   );
 
   if (!result.success) {

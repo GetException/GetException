@@ -36,6 +36,23 @@ class PackageContentsTests(unittest.TestCase):
                         with self.assertRaises(RuntimeError):
                             packages.package_files(archive)
 
+    def test_cli_archive_requires_the_public_integration_entrypoint(self):
+        allowed = ["package/package.json", "package/LICENSE", "package/README.md",
+                   "package/THIRD-PARTY-NOTICES.md", "package/dist/index.js", "package/dist/index.d.ts",
+                   "package/dist/integration.js", "package/dist/integration.d.ts"]
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "cli.tgz"
+            for files, valid in [(allowed, True), (allowed[:-1], False)]:
+                with self.subTest(files=files):
+                    with tarfile.open(archive, "w:gz") as stream:
+                        for name in files:
+                            stream.addfile(tarfile.TarInfo(name), io.BytesIO())
+                    if valid:
+                        self.assertEqual(set(packages.package_files(archive, "cli")), set(allowed))
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            packages.package_files(archive, "cli")
+
 
 if __name__ == "__main__":
     unittest.main()

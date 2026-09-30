@@ -824,6 +824,8 @@ __metadata:
   resolution: "@getexception/cli@workspace:packages/cli"
   dependencies:
     "@getexception/protocol": "workspace:*"
+    acorn: "npm:8.18.0"
+    postcss: "npm:8.5.28"
     zod: "npm:4.5.4"
   bin:
     getexception: ./dist/index.js
@@ -2742,7 +2744,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"acorn@npm:^8.15.0, acorn@npm:^8.16.0":
+"acorn@npm:8.18.0, acorn@npm:^8.15.0, acorn@npm:^8.16.0":
   version: 8.18.0
   resolution: "acorn@npm:8.18.0"
   bin:
@@ -4913,7 +4915,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"postcss@npm:^8.5.16, postcss@npm:^8.5.6":
+"postcss@npm:8.5.28, postcss@npm:^8.5.16, postcss@npm:^8.5.6":
   version: 8.5.28
   resolution: "postcss@npm:8.5.28"
   dependencies:

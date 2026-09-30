@@ -3,11 +3,13 @@ import tarfile
 from pathlib import Path
 
 
-def package_files(path):
+def package_files(path, name="browser"):
     with tarfile.open(path, "r:gz") as archive:
         members = archive.getmembers()
         allowed = {"package/package.json", "package/LICENSE", "package/README.md", "package/THIRD-PARTY-NOTICES.md",
                    "package/dist/index.js", "package/dist/index.d.ts"}
+        if name == "cli":
+            allowed.update({"package/dist/integration.js", "package/dist/integration.d.ts"})
         if len(members) != len(allowed) or {item.name for item in members} != allowed:
             raise RuntimeError("Unexpected files in the published SDK")
         if any(not item.isfile() or item.size > 5_000_000 for item in members):
@@ -23,6 +25,6 @@ if __name__ == "__main__":
     name = options.name
     directory = Path(".artifacts/registry")
     if options.archive:
-        package_files(options.archive)
-    elif package_files(directory / (name + ".tgz")) != package_files(directory / (name + "-expected.tgz")):
+        package_files(options.archive, name)
+    elif package_files(directory / (name + ".tgz"), name) != package_files(directory / (name + "-expected.tgz"), name):
         raise RuntimeError("An existing npm version has different content; never overwrite or skip it")

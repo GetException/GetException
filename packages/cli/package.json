@@ -16,6 +16,12 @@
   "bin": {
     "getexception": "./dist/index.js"
   },
+  "exports": {
+    "./integration": {
+      "types": "./dist/integration.d.ts",
+      "import": "./dist/integration.js"
+    }
+  },
   "engines": {
     "node": ">=20.19.6"
   },
@@ -27,5 +33,9 @@
     "type": "git",
     "url": "git+https://github.com/GetException/GetException.git",
     "directory": "packages/cli"
+  },
+  "dependencies": {
+    "acorn": "8.18.0",
+    "postcss": "8.5.28"
   }
 }

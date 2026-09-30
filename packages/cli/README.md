@@ -18,6 +18,33 @@ The Owner creates **Source map upload tokens** in the project's settings. Store 
 
 For GitLab MR previews use short-lived `GETEXCEPTION_GITLAB_ID_TOKEN` instead, after the operator has configured the pinned GitLab trust policy. Run `getexception ci context --url <HTTPS dashboard origin> --project <UUID>` before building; use the returned release, deployment and asset prefix for the actual JavaScript output. Upload and release registration use that identity automatically. Never set both credential variables. See the [GitLab integration guide](../../docs/gitlab-ci.md) for server configuration, exact build isolation and production restrictions. Version 0.1.7 does not support this flow.
 
+## Reusable GitLab deployment integration
+
+Applications with a Node deployment script can use `@getexception/cli/integration` instead of implementing CI identity checks, source-map batching, public-output checks, upload retries and release registration themselves:
+
+```ts
+import { deployWithGetException } from "@getexception/cli/integration";
+
+await deployWithGetException({
+  url: "https://monitor.example.com",
+  projectId: process.env.GETEXCEPTION_PROJECT_ID!,
+  releasePrefix: "account",
+  repository: { id: 123, path: "company/frontend/account" },
+  environment: "production",
+  environmentName: "production/app",
+  output: "packages/app/build",
+  runtimeEnv: {
+    release: "APP_GETEXCEPTION_RELEASE",
+    environment: "APP_GETEXCEPTION_ENVIRONMENT",
+  },
+  beforeBuild: async (safeEnv) => installAndSetUpDeployment(safeEnv),
+  build: async (safeEnv) => buildApplication(safeEnv),
+  deploy: async () => deployApplication(),
+});
+```
+
+`beforeBuild` is optional and runs once after the GitLab token has been removed from the process and the environment passed to the callback; use it for installation or SSH setup. `build` and `deploy` are the application's existing operations. `build` must start from a clean output directory on every call: if private map preparation fails or exceeds its five-minute preparation deadline, the integration calls it once more with maps disabled, then checks the public output before deploy. A compiler error, unsafe public output or failed deploy still stops the job. Context, registration and map-delivery failures do not undo a successful deploy; the result records `ready`, `disabled`, `failed` or `incomplete` and logs one safe summary. Registration and upload run only after deploy. The signed server context still decides what each job may upload. The integration works for other projects by changing the explicit project, repository, release prefix, environment and callbacks. It supports final ESM `.js`/`.mjs` and external non-indexed source maps; framework-specific build and deploy commands remain in the application.
+
 The current CI context contract is **version 2**; CLI 0.1.8 must be upgraded to use it. The Owner selects **Production only** or **Production and MR** under project settings and adds trusted fork project IDs/paths. No container restart is needed. A context includes `sourceMaps: {enabled: true}` or, for a trusted preview with maps disabled, `{enabled: false, reason: "preview_disabled"}`. An unlisted preview source receives only `{version: 2, sourceMaps: {enabled: false, reason: "source_not_allowed"}}` with no build context or release-registration permission. Skip responses mean build/deploy without maps, not disable SDK events. Invalid credentials, HTTP failures and unknown contracts remain CLI errors; the caller handles them as optional monitoring failures and continues the normal application build/deploy without maps. A trusted context can still register its release while maps are disabled. Production never receives a skip response.
 
 Permanent upload tokens cannot be created or used for projects with GitLab authentication configured. They remain available for other trusted CI integrations. Forks may upload only their own preview job's maps; the main repository remains the only production source. Actual map read access is never granted to CI.
@@ -28,7 +55,7 @@ Deploy the resulting `dist` unchanged. Upload failure does not undo preparation:
 
 `upload` sends an authenticated manifest, gzip-compresses each map in memory, uploads up to eight files concurrently with checksums, then waits for background validation. It retries bounded transient network/server failures, resumes the same manifest from its missing files, has a twenty-minute deadline per batch, and exits nonzero on failure. Neither production nor preview deployment depends on GetException availability. Deploy the safe prepared JavaScript first, then attempt map delivery from the same isolated job workspace. The CI wrapper catches monitoring failures and emits a prominent production warning or a single neutral preview log line. Only report successful map delivery when all batches are ready. A failed local prepare requires one clean rebuild without maps; a late successful upload automatically reprocesses existing errors. Do not retain maps in GitLab artifacts as a fallback. Raw maps have no download endpoint.
 
-Limits: 128 JS files and 128 MiB per upload, 16 MiB per map, 1 GiB per project, 10 GiB per installation. Non-indexed Source Map v3 JSON only; no archives or remote source downloads. Gzip is used only as bounded HTTPS transfer encoding and does not change the stored map format. Existing events are processed after a late upload. Errors thrown in the browser console have no source file and cannot gain a source snippet from a map.
+Limits: 128 JS files and 128 MiB per upload, 16 MiB per map, 4 GiB per project, 8 GiB per installation, with a 5 GiB free-disk reserve for uploads. The Node integration splits a larger build into upload batches automatically. Non-indexed Source Map v3 JSON only; no archives or remote source downloads. Gzip is used only as bounded HTTPS transfer encoding and does not change the stored map format. Existing events are processed after a late upload. Errors thrown in the browser console have no source file and cannot gain a source snippet from a map.
 
 MIT. See `THIRD-PARTY-NOTICES.md`.
 
@@ -44,7 +71,7 @@ Use the GitLab target repository's numeric project ID and the MR IID belonging t
 
 With GitLab build authentication, use the exact `release` and `deployment` returned by `ci context` instead of constructing registration metadata yourself. `CI_MERGE_REQUEST_PROJECT_ID` is not a substitute for the target project in a fork workflow.
 
-Debug IDs are deterministic for identical JS, maps and paths, regardless of the release SHA. The server reuses private bytes within the project and `upload` skips files it already has. Every release still sends its own manifest. Changed JavaScript requires its matching map: there is no fallback to the latest production map. Ready maps older than 30 days are eligible for cleanup only when their release has no retained events or pending inbox events. Shared files survive until all references expire.
+Debug IDs are deterministic for identical JS, maps and paths, regardless of the release SHA. The server reuses private bytes within the project and `upload` skips files it already has. Every release still sends its own manifest. Changed JavaScript requires its matching map: there is no fallback to the latest production map. Ready maps older than 30 days are eligible for cleanup when retained events do not use their Debug IDs, and expire after 60 days even if those events remain. Pending events postpone cleanup until processed. Shared files survive until all references expire.
 
 CI wrappers must keep `ci context` and release registration on short timeouts. Run map delivery only after the application is deployed and give each upload subprocess a hard timeout slightly longer than the CLI's twenty-minute deadline. Do not impose one small shared timeout on all batches: that makes valid larger builds fail based on transfer time. See the [failure handling contract](../../docs/gitlab-ci.md#обработка-сбоев-в-account). Do not mark the whole build job as allowed to fail. Compiler, deployment and public-output safety failures remain real job failures.
 
