@@ -17,6 +17,16 @@ export { authorizeUpload } from "./authorization";
 const gunzipAsync = promisify(gunzip);
 const compressedBodyOverhead = 64 * 1024;
 
+async function requireDiskReserve(store: SourceMapStore, bytes: bigint) {
+  const freeBytes = await store.availableBytes().catch(() => {
+    throw new AuthError(503, "source_map_storage_unavailable");
+  });
+
+  if (freeBytes - bytes < BigInt(SOURCE_MAP_LIMITS.diskReserveBytes)) {
+    throw new AuthError(507, "source_map_disk_full");
+  }
+}
+
 async function lockUpload(
   tx: Transaction,
   uploadId: string,
@@ -148,10 +158,19 @@ export async function beginUpload(
         }),
       );
       const [usage, fileCount] = await Promise.all([
-        tx.$queryRaw<{ projectBytes: bigint; totalBytes: bigint }[]>`
+        tx.$queryRaw<
+          {
+            projectBytes: bigint;
+            totalBytes: bigint;
+            reservedBytes: bigint;
+          }[]
+        >`
           SELECT COALESCE(sum(size) FILTER (WHERE "projectId" = ${projectId}), 0)::bigint AS "projectBytes",
-                 COALESCE(sum(size), 0)::bigint AS "totalBytes"
-          FROM (SELECT "storageId", "projectId", max(size) AS size FROM source_artifact GROUP BY "storageId", "projectId") files`,
+                 COALESCE(sum(size), 0)::bigint AS "totalBytes",
+                 COALESCE(sum(size) FILTER (WHERE NOT uploaded), 0)::bigint AS "reservedBytes"
+          FROM (SELECT "storageId", "projectId", max(size) AS size,
+                       bool_or("uploadedAt" IS NOT NULL) AS uploaded
+                FROM source_artifact GROUP BY "storageId", "projectId") files`,
         tx.sourceArtifact.count(),
       ]);
       const bytes = prepared
@@ -170,6 +189,11 @@ export async function beginUpload(
         throw new AuthError(413, "source_map_quota");
       }
 
+      await requireDiskReserve(
+        store,
+        (usage[0]?.reservedBytes ?? 0n) + BigInt(bytes),
+      );
+
       const upload = await tx.sourceMapUpload.create({
         data: {
           projectId,
@@ -184,8 +208,12 @@ export async function beginUpload(
 
       await tx.release.upsert({
         where: { projectId_name: { projectId, name: input.release } },
-        create: { projectId, name: input.release, sourceMapsState: "pending" },
-        update: {},
+        create: {
+          projectId,
+          name: input.release,
+          sourceMapsState: "pending",
+        },
+        update: { lastActivityAt: new Date() },
       });
       await tx.release.updateMany({
         where: { projectId, name: input.release, sourceMapsVersion: 0 },
@@ -261,6 +289,16 @@ export async function uploadArtifact(
         throw new AuthError(409);
       }
 
+      // Include every unfinished file so concurrent artifact PUTs can proceed
+      // without allowing their combined writes to use the free-disk reserve.
+      const reservation = await tx.$queryRaw<{ bytes: bigint }[]>`
+        SELECT COALESCE(sum(size), 0)::bigint AS bytes
+        FROM (SELECT "storageId", "projectId", max(size) AS size,
+                     bool_or("uploadedAt" IS NOT NULL) AS uploaded
+              FROM source_artifact GROUP BY "storageId", "projectId") files
+        WHERE NOT uploaded`;
+
+      await requireDiskReserve(store, reservation[0]?.bytes ?? 0n);
       await store.write(current.storageId, bytes);
       await tx.sourceArtifact.update({
         where: { id: current.id },

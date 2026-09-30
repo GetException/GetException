@@ -1,4 +1,5 @@
-import type { Database } from "@getexception/db";
+import { Prisma, type Database } from "@getexception/db";
+import { RETENTION_DAYS } from "@getexception/protocol";
 import { SourceMapStore } from "@getexception/source-maps";
 
 const cursors = new Map<string, string>();
@@ -8,33 +9,67 @@ export async function retainSourceMaps(
   store = new SourceMapStore(),
   now = new Date(),
 ) {
-  const abandoned = new Date(now.getTime() - 86400_000);
-  const unused = new Date(now.getTime() - 30 * 86400_000);
+  const abandoned = new Date(
+    now.getTime() - RETENTION_DAYS.incompleteUploads * 86400_000,
+  );
+  const unused = new Date(
+    now.getTime() - RETENTION_DAYS.sourceMaps * 86400_000,
+  );
+  const maximum = new Date(
+    now.getTime() - RETENTION_DAYS.sourceMapsMaximum * 86400_000,
+  );
+  const expired = Prisma.sql`
+    (u.status IN ('receiving', 'failed', 'pending') AND u."updatedAt" < ${abandoned})
+    OR (u.status = 'validating' AND u."updatedAt" < ${abandoned}
+      AND (u."leaseUntil" IS NULL OR u."leaseUntil" < ${now}))
+    OR (u.status = 'ready' AND u."createdAt" < ${unused}
+      AND (u."createdAt" < ${maximum} OR NOT EXISTS (
+        SELECT 1 FROM error_event e
+        WHERE e."projectId" = u."projectId" AND e.release = u.release
+          AND (
+            EXISTS (
+              SELECT 1 FROM jsonb_array_elements(e.frames) frame
+              WHERE frame->>'debug_id' IS NULL
+            )
+            OR EXISTS (
+              SELECT 1 FROM source_artifact a
+              JOIN LATERAL jsonb_array_elements(e.frames) frame ON true
+              WHERE a."uploadId" = u.id
+                AND frame->>'debug_id' = a."debugId"
+            )
+          )
+      ))
+      AND NOT EXISTS (
+        SELECT 1 FROM event_inbox q
+        WHERE q."projectId" = u."projectId"
+          AND q.status IN ('pending', 'processing')
+          AND q.payload->>'release' = u.release
+      ))
+  `;
   // Filter before LIMIT so long-lived active releases cannot starve cleanup.
-  const candidates = await db.$queryRaw<
-    { id: string }[]
-  >`SELECT u.id FROM source_map_upload u WHERE (u.status IN ('receiving','failed') AND u."updatedAt" < ${abandoned}) OR (u.status = 'ready' AND u."createdAt" < ${unused} AND NOT EXISTS (SELECT 1 FROM error_event e WHERE e."projectId" = u."projectId" AND e.release = u.release) AND NOT EXISTS (SELECT 1 FROM event_inbox q WHERE q."projectId" = u."projectId" AND q.status IN ('pending','processing') AND q.payload->>'release' = u.release)) ORDER BY u."createdAt" LIMIT 10`;
+  const candidates = await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+    SELECT u.id FROM source_map_upload u
+    WHERE ${expired}
+    ORDER BY u."createdAt", u.id LIMIT 10
+  `);
   const uploads = await db.sourceMapUpload.findMany({
     where: { id: { in: candidates.map(({ id }) => id) } },
   });
 
   for (const upload of uploads) {
-    if (
-      upload.status === "ready" &&
-      (await db.errorEvent.count({
-        where: { projectId: upload.projectId, release: upload.release },
-      }))
-    ) {
+    const removed = await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+      DELETE FROM source_map_upload u
+      WHERE u.id = ${upload.id}
+        AND u.status = ${upload.status}
+        AND u."updatedAt" = ${upload.updatedAt}
+        AND (${expired})
+      RETURNING u.id
+    `);
+
+    if (!removed.length || upload.status !== "ready") {
       continue;
     }
 
-    await db.sourceMapUpload.deleteMany({
-      where: {
-        id: upload.id,
-        status: upload.status,
-        updatedAt: upload.updatedAt,
-      },
-    });
     const ready = await db.sourceMapUpload.count({
       where: {
         projectId: upload.projectId,
@@ -46,7 +81,7 @@ export async function retainSourceMaps(
     if (!ready) {
       await db.release.updateMany({
         where: { projectId: upload.projectId, name: upload.release },
-        data: { sourceMapsState: "missing" },
+        data: { sourceMapsState: "removed" },
       });
     }
   }

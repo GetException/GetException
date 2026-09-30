@@ -103,6 +103,12 @@ export async function safeRoute(fn: () => Promise<Response>) {
           : 503;
 
     const reasons: Record<string, string> = {
+      source_map_disk_full:
+        "Source map upload would use the disk reserve. Free server space before retrying.",
+      source_map_storage_unavailable:
+        "Source map storage is temporarily unavailable. Retry after checking the server volume.",
+      source_map_quota:
+        "Source map storage quota is full. Remove unused maps or contact the operator.",
       source_map_policy_invalid:
         "Check the project IDs and repository paths. Each fork must appear once; at most 20 forks are allowed.",
       source_map_ci_unconfigured:

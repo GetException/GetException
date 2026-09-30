@@ -18,11 +18,13 @@ export function IssueBuildContext({
   environment,
   releaseName,
   release,
+  symbolicationState,
 }: {
   projectId: string;
   environment: string;
   releaseName?: string | null;
   release?: Release | null;
+  symbolicationState?: string;
 }) {
   const reviews =
     environment === "staging" && release
@@ -39,6 +41,16 @@ export function IssueBuildContext({
       <span className={`environment-badge environment-${environment}`}>
         {environmentLabel}
       </span>
+      {symbolicationState && (
+        <span
+          className={`pill map-state map-${symbolicationState === "complete" || symbolicationState === "partial" ? "ready" : "missing"}`}
+          title="Source context for this retained event"
+        >
+          {symbolicationState === "complete" || symbolicationState === "partial"
+            ? "Source available"
+            : "Compiled stack"}
+        </span>
+      )}
       {releaseName &&
         (release ? (
           <Link className="text-link mono" href={`/releases/${release.id}`}>

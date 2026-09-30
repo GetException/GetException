@@ -682,7 +682,7 @@ describe("durable inbox and separate SQL roles", () => {
     ).toBe("dead");
     expect(await claim(worker)).toBeNull();
   });
-  it("retains group aggregates while deleting old events in bounded batches", async () => {
+  it("removes old events and terminal receipts while keeping active groups", async () => {
     const { project: p } = await project();
 
     await insert(p.id);
@@ -690,11 +690,14 @@ describe("durable inbox and separate SQL roles", () => {
     await instance.admin.errorEvent.updateMany({
       data: { receivedAt: new Date(0) },
     });
+    await instance.admin.eventInbox.updateMany({
+      data: { receivedAt: new Date(0) },
+    });
     expect(await retainBatch(worker)).toBe(1);
     expect(await instance.admin.issue.count()).toBe(1);
     expect(
       await instance.admin.eventInbox.count({ where: { status: "done" } }),
-    ).toBe(1);
+    ).toBe(0);
   });
   it("applies the next migration on an existing previous schema without data loss", async () => {
     const client = new pg.Client({ connectionString: instance.adminUrl });
@@ -719,6 +722,7 @@ describe("durable inbox and separate SQL roles", () => {
         releaseContext,
         sourceMapPolicy,
         manualInvitations,
+        monitoringRetention,
       ] = migrationFiles();
 
       await upgrade.query(initial!);
@@ -918,6 +922,25 @@ describe("durable inbox and separate SQL roles", () => {
           )
         ).rows[0]?.allowed,
       ).toBe(false);
+      await upgrade.query(monitoringRetention!);
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rowCount,
+      ).toBe(0);
+      await upgrade.query(
+        "INSERT INTO _prisma_migrations(finished_at) VALUES (now())",
+      );
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
+          ?.version,
+      ).toBe(9);
+      expect(
+        (
+          await upgrade.query(
+            'SELECT "lastActivityAt" >= "createdAt" AS preserved FROM release WHERE id = $1',
+            ["upgrade-release"],
+          )
+        ).rows[0]?.preserved,
+      ).toBe(true);
       expect(
         (await upgrade.query('SELECT name, enabled, "deletedAt" FROM project'))
           .rows,

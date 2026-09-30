@@ -3,7 +3,9 @@ import { setTimeout } from "node:timers/promises";
 import { createDatabase, assertSchema } from "@getexception/db";
 import { workerConcurrency, logCode } from "@getexception/config";
 import { queueMetrics, retainBatch, runOne } from "./events";
+import { retainExpiredAuth } from "./auth-retention";
 import { purgeDeletedProjectBatch } from "./project-retention";
+import { retainReleases } from "./release-retention";
 import { validateOneUpload } from "./source-maps/uploads";
 import { reprocessOneEvent } from "./source-maps/reprocess";
 import { retainSourceMaps } from "./source-maps/retention";
@@ -67,7 +69,9 @@ async function main() {
       try {
         if (mode === "worker-retention") {
           await purgeDeletedProjectBatch(db);
+          await retainExpiredAuth(db);
           await retainSourceMaps(db);
+          await retainReleases(db);
         }
 
         const worked =

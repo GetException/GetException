@@ -169,3 +169,27 @@ it("groups preview builds by repository and MR, with a link to all builds", asyn
     }),
   );
 });
+
+it("shows removed artifacts separately from retained events with source context", async () => {
+  db.release.findFirst.mockResolvedValue({
+    ...releases[1],
+    sourceMapsState: "removed",
+  });
+  const html = renderToStaticMarkup(
+    await ReleasePage({
+      params: Promise.resolve({ id: "second" }),
+      searchParams: Promise.resolve({}),
+    }),
+  );
+
+  expect(html).toContain("Removed");
+  expect(html).toContain("Events with source");
+  expect(html).toContain("at least one mapped frame");
+  expect(db.errorEvent.count).toHaveBeenCalledWith({
+    where: {
+      projectId: "account",
+      release: releases[1]!.name,
+      symbolicationState: { in: ["complete", "partial"] },
+    },
+  });
+});

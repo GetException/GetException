@@ -24,7 +24,7 @@ export default async function ReleasesPage({
   searchParams: Promise<Search>;
 }) {
   const filters = releaseFilters(await searchParams);
-  const { project, q, environment, review, page } = filters;
+  const { project, q, environment, review, maps, page } = filters;
   const { member } = await dashboardUser();
   const { db } = getRuntime();
   const where = releaseWhere(member, filters);
@@ -90,6 +90,7 @@ export default async function ReleasesPage({
                 project,
                 q,
                 environment: value,
+                maps,
                 ...(value === "staging" ? { review } : {}),
               })}
               aria-current={environment === value ? "page" : undefined}
@@ -111,11 +112,23 @@ export default async function ReleasesPage({
             />
           </label>
           <ProjectSelect projects={projects} selected={project} />
+          <label className="filter-field">
+            Source maps
+            <select aria-label="Source maps" name="maps" defaultValue={maps}>
+              <option value="all">All states</option>
+              <option value="ready">Available</option>
+              <option value="unavailable">Unavailable</option>
+              <option value="removed">Removed</option>
+              <option value="missing">Not uploaded</option>
+              <option value="failed">Upload failed</option>
+              <option value="pending">Processing</option>
+            </select>
+          </label>
           <button className="button">Apply filters</button>
           {review && (
             <Link
               className="text-link"
-              href={linkTo("/releases", { project, environment, q })}
+              href={linkTo("/releases", { project, environment, q, maps })}
             >
               All merge requests
             </Link>
@@ -144,6 +157,7 @@ export default async function ReleasesPage({
                             project: items[0]!.projectId,
                             environment,
                             review: releaseReviews(items[0]!.deployments)[0],
+                            maps,
                           })}
                         >
                           {reviewLabel(
@@ -161,7 +175,10 @@ export default async function ReleasesPage({
                         value.projectId === release.projectId &&
                         value.release === release.name,
                     );
-                    const maps = sourceMapStatus(release.sourceMapsState);
+                    const mapStatus = sourceMapStatus(
+                      release.sourceMapsState,
+                      release.sourceMapsVersion,
+                    );
 
                     return (
                       <tr key={release.id}>
@@ -203,6 +220,7 @@ export default async function ReleasesPage({
                                     project: release.projectId,
                                     environment: "staging",
                                     review: key,
+                                    maps,
                                   })}
                                 >
                                   {reviewLabel(key)} ↗
@@ -225,10 +243,10 @@ export default async function ReleasesPage({
                         </td>
                         <td>
                           <span
-                            className={`pill map-state map-${maps.tone}`}
-                            title={maps.caption}
+                            className={`pill map-state map-${mapStatus.tone}`}
+                            title={mapStatus.caption}
                           >
-                            {maps.label}
+                            {mapStatus.label}
                           </span>
                         </td>
                       </tr>
@@ -245,7 +263,7 @@ export default async function ReleasesPage({
         )}
         <Pagination
           path="/releases"
-          values={{ project, q, environment, review }}
+          values={{ project, q, environment, review, maps }}
           page={page}
           total={total}
         />

@@ -7,7 +7,10 @@ import {
   releaseFilters,
   releaseWhere,
 } from "../../apps/web/src/server/releases/filters";
-import { reviewLabel } from "../../apps/web/src/components/releases/presentation";
+import {
+  reviewLabel,
+  sourceMapStatus,
+} from "../../apps/web/src/components/releases/presentation";
 
 it("accepts only bounded CI metadata and never accepts arbitrary URLs or production MR labels", () => {
   const value = {
@@ -69,6 +72,29 @@ it("keeps environment and review filters inside the authorized project scope", (
   expect(
     releaseFilters({ environment: ["production"], review: "<script>" }),
   ).toMatchObject({ environment: "all", review: "" });
+});
+
+it("distinguishes removed maps from maps that were never uploaded", () => {
+  const member = {
+    id: "viewer",
+    organizationId: "workspace",
+    role: "viewer" as const,
+  };
+
+  expect(sourceMapStatus("removed").label).toBe("Removed");
+  expect(sourceMapStatus("missing").label).toBe("Not uploaded");
+  expect(sourceMapStatus("missing", 2).label).toBe("Removed");
+  expect(
+    releaseWhere(member, releaseFilters({ maps: "unavailable" }))
+      .sourceMapsState,
+  ).toEqual({ in: ["missing", "removed", "failed"] });
+  expect(releaseWhere(member, releaseFilters({ maps: "removed" })).OR).toEqual([
+    { sourceMapsState: "removed" },
+    { sourceMapsState: "missing", sourceMapsVersion: { gt: 0 } },
+  ]);
+  expect(
+    releaseWhere(member, releaseFilters({ maps: "missing" })),
+  ).toMatchObject({ sourceMapsState: "missing", sourceMapsVersion: 0 });
 });
 
 it("shows every observed environment, deduplicates MR labels, and never guesses an MR from staging", () => {

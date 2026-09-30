@@ -6,11 +6,13 @@ import {
   issueTrend,
   latestIssueEvents,
 } from "../../apps/web/src/server/issues/insights";
+import { issueFilters, issueWhere } from "../../apps/web/src/server/filters";
 
 let instance: Awaited<ReturnType<typeof temporaryDatabase>>;
 let web: ReturnType<typeof createDatabase>;
 let projectId: string;
 let issueId: string;
+let organizationId: string;
 const previewRelease = `account@${"a".repeat(40)}`;
 const productionRelease = `account@${"b".repeat(40)}`;
 
@@ -41,11 +43,12 @@ beforeAll(async () => {
 
   projectId = project.id;
   issueId = issue.id;
+  organizationId = organization.id;
 
-  for (const [receivedAt, environment, release] of [
-    ["2026-09-19T10:00:00Z", "staging", previewRelease],
-    ["2026-09-19T11:00:00Z", "staging", previewRelease],
-    ["2026-09-21T10:00:00Z", "production", productionRelease],
+  for (const [receivedAt, environment, release, symbolicationState] of [
+    ["2026-09-19T10:00:00Z", "staging", previewRelease, "partial"],
+    ["2026-09-19T11:00:00Z", "staging", previewRelease, "missing"],
+    ["2026-09-21T10:00:00Z", "production", productionRelease, "missing"],
   ] as const) {
     await instance.admin.errorEvent.create({
       data: {
@@ -56,6 +59,7 @@ beforeAll(async () => {
         timestamp: new Date(receivedAt),
         environment,
         release,
+        symbolicationState,
         level: "error",
         message: "Preview error",
         exceptionType: "TypeError",
@@ -66,6 +70,42 @@ beforeAll(async () => {
       },
     });
   }
+});
+
+it("finds source context in an older event without confusing another environment", async () => {
+  const member = { id: "owner", role: "owner" as const, organizationId };
+  const selected = { environment: "staging", release: previewRelease };
+  const [mapped, unmapped, production] = await Promise.all([
+    web.issue.count({
+      where: issueWhere(
+        member,
+        issueFilters({ ...selected, source: "mapped" }),
+      ),
+    }),
+    web.issue.count({
+      where: issueWhere(
+        member,
+        issueFilters({ ...selected, source: "unmapped" }),
+      ),
+    }),
+    web.issue.count({
+      where: issueWhere(
+        member,
+        issueFilters({ environment: "production", source: "unmapped" }),
+      ),
+    }),
+  ]);
+  const latestMapped = await latestIssueEvents(web, [issueId], {
+    ...selected,
+    source: "mapped",
+  });
+
+  expect([mapped, unmapped, production]).toEqual([1, 0, 1]);
+  expect(latestMapped[0]).toMatchObject({
+    issueId,
+    symbolicationState: "partial",
+    environment: "staging",
+  });
 });
 
 afterAll(async () => {

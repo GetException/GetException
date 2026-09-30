@@ -17,6 +17,16 @@ export function releaseFilters(search: Search) {
       ? environment
       : "all",
     review: reviewLabel(review) ? review : "",
+    maps: [
+      "ready",
+      "unavailable",
+      "removed",
+      "missing",
+      "failed",
+      "pending",
+    ].includes(textParam(search.maps))
+      ? textParam(search.maps)
+      : "all",
     page: pageNumber(search.page),
   };
 }
@@ -33,6 +43,20 @@ export function releaseWhere(
     ...(filters.q
       ? { name: { contains: filters.q, mode: "insensitive" as const } }
       : {}),
+    ...(filters.maps === "unavailable"
+      ? { sourceMapsState: { in: ["missing", "removed", "failed"] } }
+      : filters.maps === "removed"
+        ? {
+            OR: [
+              { sourceMapsState: "removed" },
+              { sourceMapsState: "missing", sourceMapsVersion: { gt: 0 } },
+            ],
+          }
+        : filters.maps === "missing"
+          ? { sourceMapsState: "missing", sourceMapsVersion: 0 }
+          : filters.maps !== "all"
+            ? { sourceMapsState: filters.maps }
+            : {}),
     ...(filters.environment !== "all" || filters.review
       ? {
           deployments: {

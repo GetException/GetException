@@ -16,6 +16,9 @@ export function issueFilters(search: Search) {
     )
       ? textParam(search.environment)
       : "all",
+    source: ["mapped", "unmapped"].includes(textParam(search.source))
+      ? textParam(search.source)
+      : "all",
     period: ["24h", "7d", "30d"].includes(textParam(search.period))
       ? textParam(search.period)
       : "all",
@@ -32,6 +35,13 @@ export function issueWhere(
   filters: ReturnType<typeof issueFilters>,
   now = Date.now(),
 ): Prisma.IssueWhereInput {
+  const eventScope = {
+    ...(filters.environment !== "all"
+      ? { environment: filters.environment }
+      : {}),
+    ...(filters.release ? { release: filters.release } : {}),
+  };
+
   return {
     eventCount: { gt: 0 },
     project: {
@@ -61,17 +71,21 @@ export function issueWhere(
           },
         }
       : {}),
-    ...(filters.environment !== "all" || filters.release
-      ? {
-          events: {
-            some: {
-              ...(filters.environment !== "all"
-                ? { environment: filters.environment }
-                : {}),
-              ...(filters.release ? { release: filters.release } : {}),
+    events: {
+      some: {
+        ...eventScope,
+        ...(filters.source === "mapped"
+          ? { symbolicationState: { in: ["complete", "partial"] } }
+          : {}),
+      },
+      ...(filters.source === "unmapped"
+        ? {
+            none: {
+              ...eventScope,
+              symbolicationState: { in: ["complete", "partial"] },
             },
-          },
-        }
-      : {}),
+          }
+        : {}),
+    },
   };
 }

@@ -91,6 +91,7 @@ beforeEach(() => {
       environment: "staging",
       release: releaseName,
       receivedAt: date,
+      symbolicationState: "missing",
     },
   ]);
   issueTrend.mockResolvedValue([{ date: "2026-09-21", count: 2 }]);
@@ -104,6 +105,8 @@ it("shows the latest retained build and opens that event from the Issues list", 
   expect(html).toContain("Latest retained event");
   expect(html).toContain("Preview / staging");
   expect(html).toContain("MR !554");
+  expect(html).toContain("Compiled stack");
+  expect(html).toContain("Has source context");
   expect(html).toContain(`/issues/issue?event=${selected.eventId}`);
   expect(latestIssueEvents).toHaveBeenCalledWith(
     db,

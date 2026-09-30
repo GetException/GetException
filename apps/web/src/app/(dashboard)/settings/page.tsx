@@ -57,7 +57,15 @@ export default async function SettingsPage() {
               </div>
               <div>
                 <dt>Issue history</dt>
-                <dd>Kept until the project is deleted</dd>
+                <dd>30 days after the last event</dd>
+              </div>
+              <div>
+                <dt>Release metadata</dt>
+                <dd>90 days after the last activity</dd>
+              </div>
+              <div>
+                <dt>Invitation history</dt>
+                <dd>90 days after expiry</dd>
               </div>
             </dl>
           </section>

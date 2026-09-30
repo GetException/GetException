@@ -25,6 +25,8 @@ export {
   type ReleaseDeploymentInput,
 } from "./releases";
 
+export { RETENTION_DAYS } from "./retention";
+
 export {
   SOURCE_MAP_LIMITS,
   sourceUploadSchema,

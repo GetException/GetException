@@ -40,7 +40,10 @@ export default async function ReleasePage({
     ...(environment !== "all" ? { environment } : {}),
   };
   const scope = { projectId: release.projectId, ...eventScope };
-  const maps = sourceMapStatus(release.sourceMapsState);
+  const maps = sourceMapStatus(
+    release.sourceMapsState,
+    release.sourceMapsVersion,
+  );
   const locations = releaseEnvironments(release.deployments);
   const [events, issueCount, issues, mappedEvents] = await Promise.all([
     db.errorEvent.aggregate({
@@ -73,7 +76,7 @@ export default async function ReleasePage({
       },
     }),
     db.errorEvent.count({
-      where: { ...scope, symbolicationState: "complete" },
+      where: { ...scope, symbolicationState: { in: ["complete", "partial"] } },
     }),
   ]);
   const issuesLink = linkTo("/issues", {
@@ -147,14 +150,11 @@ export default async function ReleasePage({
           }
           caption={"Environments reported by events or CI"}
         />
+        <Stat label="Source maps" value={maps.label} caption={maps.caption} />
         <Stat
-          label="Source maps"
-          value={maps.label}
-          caption={
-            release.sourceMapsState === "ready"
-              ? `${number(mappedEvents)} of ${number(events._count._all)} retained events fully mapped`
-              : maps.caption
-          }
+          label="Events with source"
+          value={mappedEvents}
+          caption={`${number(mappedEvents)} of ${number(events._count._all)} retained events have at least one mapped frame`}
         />
       </div>
       <section className="panel">

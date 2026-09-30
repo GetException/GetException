@@ -41,10 +41,11 @@ export async function registerRelease(
       throw new AuthError(404);
     }
 
+    const registeredAt = new Date();
     const release = await tx.release.upsert({
       where: { projectId_name: { projectId, name: input.release } },
-      create: { projectId, name: input.release },
-      update: {},
+      create: { projectId, name: input.release, lastActivityAt: registeredAt },
+      update: { lastActivityAt: registeredAt },
     });
 
     await tx.releaseDeployment.upsert({
@@ -59,9 +60,9 @@ export async function registerRelease(
         releaseId: release.id,
         environment: input.deployment.environment,
         reviewKey,
-        registeredAt: new Date(),
+        registeredAt,
       },
-      update: { registeredAt: new Date() },
+      update: { registeredAt },
     });
 
     return { id: release.id };

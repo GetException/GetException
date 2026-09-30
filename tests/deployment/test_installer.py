@@ -39,6 +39,10 @@ class SimulatedInstallation(installer.Installation):
     def backup(self, release):
         self.calls.append((release.name, ("backup",)))
 
+    def prune_images(self, *, dry_run=False):
+        self.calls.append((self.current().name, ("prune-images",)))
+        return 0
+
     def ready(self, release, *, defer_ingest_dns=False):
         self.calls.append((release.name, ("ready-deferred",) if defer_ingest_dns else ("ready",)))
         if release == self.fail_health:
@@ -151,6 +155,7 @@ class InstallerTests(unittest.TestCase):
         operations = [args for _, args in installation.calls]
         self.assertLess(operations.index(("backup",)), operations.index(("run", "--rm", "--no-deps", "migrate")))
         self.assertLess(operations.index(("run", "--rm", "--no-deps", "migrate")), operations.index(("ready",)))
+        self.assertEqual(operations[-1], ("prune-images",))
 
     def test_health_failure_restores_previous_release_and_reports_failure(self):
         installation, old = self.active()
@@ -217,6 +222,60 @@ class InstallerTests(unittest.TestCase):
         installation.deploy(target)
         installation.deploy(target)
         self.assertEqual(json.loads((self.root / "runtime/state.json").read_text())["previous"], old.name)
+
+    def test_image_cleanup_preserves_current_previous_and_container_images(self):
+        installation, current = self.active()
+        previous = self.release()
+        installer.write_json(self.root / "runtime/state.json", {
+            "current": current.name, "previous": previous.name})
+        references = {reference for release in [current, previous]
+                      for reference in installer.metadata(release)["images"].values()}
+        image_ids = {reference: "sha256:" + format(index + 1, "064x")
+                     for index, reference in enumerate(sorted(references))}
+        current_id, previous_id = list(image_ids.values())[:2]
+        old_id = "sha256:" + "b" * 64
+        container_id = "sha256:" + "c" * 64
+        unrelated_id = "sha256:" + "d" * 64
+        rows = [
+            {"Repository": "ghcr.io/getexception/getexception-web", "Tag": "<none>", "ID": identifier}
+            for identifier in [current_id, previous_id, old_id, container_id]
+        ] + [
+            {"Repository": "postgres", "Tag": "<none>", "ID": unrelated_id},
+            {"Repository": "ghcr.io/getexception/getexception-web", "Tag": "local", "ID": unrelated_id},
+        ]
+        removed = []
+
+        def docker(args, **kwargs):
+            if args[:3] == ["docker", "image", "inspect"]:
+                return "\n".join(image_ids[reference] for reference in args[3:-2])
+            if args == ["docker", "container", "ls", "-aq"]:
+                return "container"
+            if args[:3] == ["docker", "container", "inspect"]:
+                return container_id
+            if args[:3] == ["docker", "image", "ls"]:
+                return "\n".join(json.dumps(row) for row in rows)
+            if args[:3] == ["docker", "image", "rm"]:
+                removed.append(args[3])
+                return ""
+            self.fail("Unexpected Docker call: " + repr(args))
+
+        with patch.object(installer, "run", side_effect=docker):
+            self.assertEqual(installer.Installation.prune_images(installation, dry_run=True), 1)
+            self.assertEqual(removed, [])
+            self.assertEqual(installer.Installation.prune_images(installation), 1)
+        self.assertEqual(removed, [old_id])
+
+    def test_image_cleanup_stops_when_rollback_release_is_missing_or_deploy_is_pending(self):
+        installation, current = self.active()
+        installer.write_json(self.root / "runtime/state.json", {
+            "current": current.name, "previous": secrets.token_hex(20)})
+        with patch.object(installer, "run") as docker:
+            with self.assertRaisesRegex(installer.Failure, "Previous release is missing"):
+                installer.Installation.prune_images(installation)
+            docker.assert_not_called()
+        installer.write_json(installation.pending, {"phase": "start"})
+        with self.assertRaisesRegex(installer.Failure, "unfinished operation"):
+            installer.Installation.prune_images(installation)
 
     def test_staged_first_install_does_not_backup_an_uninitialized_schema(self):
         installation = SimulatedInstallation(self.root)

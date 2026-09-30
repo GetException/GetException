@@ -1,7 +1,7 @@
 import { fingerprint } from "./fingerprint";
 import { randomUUID } from "node:crypto";
 import { type Database, Prisma } from "@getexception/db";
-import { safeEventSchema } from "@getexception/protocol";
+import { RETENTION_DAYS, safeEventSchema } from "@getexception/protocol";
 import { SourceMapStore } from "@getexception/source-maps";
 import { resolveFrames } from "./source-maps/resolve";
 
@@ -141,8 +141,14 @@ export async function processJob(
         if (event.release) {
           const release = await tx.release.upsert({
             where: { projectId_name: { projectId, name: event.release } },
-            create: { projectId, name: event.release },
-            update: {},
+            create: {
+              projectId,
+              name: event.release,
+              lastActivityAt: job.receivedAt,
+            },
+            update: {
+              lastActivityAt: job.receivedAt,
+            },
           });
 
           await tx.releaseDeployment.createMany({
@@ -204,7 +210,7 @@ export async function runOne(db: Database) {
 }
 
 export async function retainBatch(db: Database, now = new Date(), batch = 100) {
-  const cutoff = new Date(now.getTime() - 30 * 86400_000);
+  const cutoff = new Date(now.getTime() - RETENTION_DAYS.events * 86400_000);
   const records = await db.errorEvent.findMany({
     where: { receivedAt: { lt: cutoff } },
     orderBy: { receivedAt: "asc" },
@@ -214,16 +220,84 @@ export async function retainBatch(db: Database, now = new Date(), batch = 100) {
   const removed = await db.errorEvent.deleteMany({
     where: { id: { in: records.map((row) => row.id) } },
   });
-  const dead = await db.eventInbox.findMany({
-    where: { status: "dead", receivedAt: { lt: cutoff } },
+  const terminal = await db.eventInbox.findMany({
+    where: {
+      status: { in: ["done", "dead", "discarded"] },
+      receivedAt: { lt: cutoff },
+    },
+    orderBy: { receivedAt: "asc" },
     take: 100,
     select: { id: true },
   });
 
-  await db.eventInbox.updateMany({
-    where: { id: { in: dead.map((row) => row.id) } },
-    data: { payload: {}, status: "discarded" },
+  await db.eventInbox.deleteMany({
+    where: {
+      id: { in: terminal.map((row) => row.id) },
+      status: { in: ["done", "dead", "discarded"] },
+      receivedAt: { lt: cutoff },
+    },
   });
+
+  const activities = await db.issueActivity.findMany({
+    where: { createdAt: { lt: cutoff } },
+    orderBy: { createdAt: "asc" },
+    take: 100,
+    select: { id: true },
+  });
+
+  await db.issueActivity.deleteMany({
+    where: {
+      id: { in: activities.map((row) => row.id) },
+      createdAt: { lt: cutoff },
+    },
+  });
+
+  await db.$queryRaw<{ id: string }[]>`
+    WITH candidates AS (
+      SELECT i.id
+      FROM issue i
+      WHERE i."lastSeen" < ${cutoff}
+        AND NOT EXISTS (SELECT 1 FROM error_event e WHERE e."issueId" = i.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM issue_activity a
+          WHERE a."projectId" = i."projectId"
+            AND (a."fromIssueId" = i.id OR a."toIssueId" = i.id)
+            AND a."createdAt" >= ${cutoff}
+        )
+      ORDER BY i."lastSeen", i.id
+      LIMIT 100
+    )
+    DELETE FROM issue i USING candidates c
+    WHERE i.id = c.id AND i."lastSeen" < ${cutoff}
+      AND NOT EXISTS (SELECT 1 FROM error_event e WHERE e."issueId" = i.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM issue_activity a
+        WHERE a."projectId" = i."projectId"
+          AND (a."fromIssueId" = i.id OR a."toIssueId" = i.id)
+          AND a."createdAt" >= ${cutoff}
+      )
+    RETURNING i.id
+  `;
+
+  const statsCutoff = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) -
+      RETENTION_DAYS.dailyStats * 86400_000,
+  );
+  const stats = await db.projectDailyStat.findMany({
+    where: { day: { lt: statsCutoff } },
+    orderBy: { day: "asc" },
+    take: 100,
+    select: { projectId: true, day: true },
+  });
+
+  if (stats.length) {
+    await db.projectDailyStat.deleteMany({
+      where: {
+        OR: stats.map(({ projectId, day }) => ({ projectId, day })),
+        day: { lt: statsCutoff },
+      },
+    });
+  }
 
   return removed.count;
 }

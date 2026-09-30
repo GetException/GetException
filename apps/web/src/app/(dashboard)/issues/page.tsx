@@ -129,6 +129,18 @@ export default async function IssuesPage({
             </select>
           </label>
           <label className="filter-field">
+            Source context
+            <select
+              aria-label="Source context"
+              name="source"
+              defaultValue={filters.source}
+            >
+              <option value="all">All issues</option>
+              <option value="mapped">Has source context</option>
+              <option value="unmapped">Compiled stacks only</option>
+            </select>
+          </label>
+          <label className="filter-field">
             Time range
             <select
               aria-label="Time range"
@@ -223,6 +235,7 @@ export default async function IssuesPage({
                             environment={latest.environment}
                             releaseName={latest.release}
                             release={release}
+                            symbolicationState={latest.symbolicationState}
                           />
                         ) : (
                           <span className="muted">No retained event</span>

@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { writeFile, mkdir, readFile, symlink } from "node:fs/promises";
 import { createDatabase } from "@getexception/db";
-import { sanitizeEvent } from "@getexception/protocol";
+import { sanitizeEvent, SOURCE_MAP_LIMITS } from "@getexception/protocol";
 import { SourceMapStore } from "@getexception/source-maps";
 import { temporaryDatabase } from "./database";
 import { createRuntime } from "../../apps/web/src/server/runtime";
@@ -170,6 +170,88 @@ it("uses scoped CI credentials, rejects session-only uploads and hides artifacts
   } finally {
     await ingest.$disconnect();
   }
+});
+
+it("refuses new maps before the volume loses its disk reserve", async () => {
+  const lowSpace = new (class extends SourceMapStore {
+    override async availableBytes() {
+      return BigInt(SOURCE_MAP_LIMITS.diskReserveBytes);
+    }
+  })(store.root);
+  const uniqueRelease = `account@${"e".repeat(40)}`;
+  const before = await web.sourceMapUpload.count({ where: { projectId } });
+
+  await expect(
+    beginUpload(
+      service,
+      headers,
+      projectId,
+      {
+        release: uniqueRelease,
+        artifacts: [
+          {
+            path: "disk-full.js",
+            debugId: randomUUID(),
+            sha256: "a".repeat(64),
+            size: 1024,
+          },
+        ],
+      },
+      lowSpace,
+    ),
+  ).rejects.toMatchObject({ status: 507, reason: "source_map_disk_full" });
+  expect(await web.sourceMapUpload.count({ where: { projectId } })).toBe(
+    before,
+  );
+});
+
+it("checks the disk again before writing a previously reserved map", async () => {
+  const lowSpace = new (class extends SourceMapStore {
+    override async availableBytes() {
+      return BigInt(SOURCE_MAP_LIMITS.diskReserveBytes);
+    }
+  })(store.root);
+  const bytes = "{}";
+  const receipt = await beginUpload(
+    service,
+    headers,
+    projectId,
+    {
+      release: `account@${"d".repeat(40)}`,
+      artifacts: [
+        {
+          path: "retry.js",
+          debugId: randomUUID(),
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          size: bytes.length,
+        },
+      ],
+    },
+    store,
+  );
+  const artifact = await web.sourceArtifact.findUniqueOrThrow({
+    where: { id: receipt.artifacts[0]!.id },
+  });
+  const request = new Request("https://monitor.example.test/upload", {
+    method: "PUT",
+    headers: {
+      ...Object.fromEntries(headers),
+      "content-type": "application/json",
+    },
+    body: bytes,
+  });
+
+  await expect(
+    uploadArtifact(
+      service,
+      request,
+      projectId,
+      receipt.uploadId,
+      artifact.id,
+      lowSpace,
+    ),
+  ).rejects.toMatchObject({ status: 507, reason: "source_map_disk_full" });
+  expect(await store.exists(artifact.storageId)).toBe(false);
 });
 
 it("uploads privately, publishes atomically and reprocesses old events with audited regrouping", async () => {
@@ -617,10 +699,122 @@ it("reuses private bytes across releases, rejects conflicting IDs and preserves 
   expect(
     await web.sourceMapUpload.findUnique({ where: { id: receipt.uploadId } }),
   ).toBeNull();
+  expect(
+    (
+      await web.release.findUniqueOrThrow({
+        where: { projectId_name: { projectId, name: nextRelease } },
+      })
+    ).sourceMapsState,
+  ).toBe("removed");
   expect(await store.exists(first.storageId)).toBe(true);
   expect((await insertEvent(first.debugId)).symbolicationState).toBe(
     "complete",
   );
+});
+
+it("keeps maps for recent events, then expires them after 60 days once the inbox drains", async () => {
+  const file = await web.sourceArtifact.findFirstOrThrow({
+    where: { projectId, path: "app.js", upload: { status: "ready" } },
+  });
+  const event = await insertEvent(file.debugId);
+  const uploadId = file.uploadId;
+
+  await instance.admin.sourceMapUpload.update({
+    where: { id: uploadId },
+    data: { createdAt: new Date(Date.now() - 40 * 86400_000) },
+  });
+  await retainSourceMaps(worker, store);
+  expect(
+    await web.sourceMapUpload.findUnique({ where: { id: uploadId } }),
+  ).not.toBeNull();
+
+  await instance.admin.sourceMapUpload.update({
+    where: { id: uploadId },
+    data: { createdAt: new Date(Date.now() - 61 * 86400_000) },
+  });
+  const pendingId = randomUUID().replaceAll("-", "");
+  const pending = await instance.admin.eventInbox.create({
+    data: {
+      projectId,
+      eventId: pendingId,
+      payload: sanitizeEvent({ message: "Pending map", release }, pendingId),
+    },
+  });
+
+  await retainSourceMaps(worker, store);
+  expect(
+    await web.sourceMapUpload.findUnique({ where: { id: uploadId } }),
+  ).not.toBeNull();
+
+  await instance.admin.eventInbox.delete({ where: { id: pending.id } });
+  await retainSourceMaps(worker, store);
+  expect(
+    await web.sourceMapUpload.findUnique({ where: { id: uploadId } }),
+  ).toBeNull();
+  expect(
+    (await web.errorEvent.findUniqueOrThrow({ where: { id: event.id } }))
+      .originalFrames,
+  ).toMatchObject([{ filename: "src/original.ts" }]);
+});
+
+it("accepts a month's 18 account-sized builds without exhausting the project quota", async () => {
+  const ids: string[] = [];
+  const mapSize = 15 * 1024 * 1024;
+  const capacityStore = new SourceMapStore(store.root);
+
+  capacityStore.availableBytes = async () => 20n * 1024n ** 3n;
+  await instance.admin.authRateBucket.deleteMany();
+
+  try {
+    for (let build = 0; build < 17; build += 1) {
+      const id = randomUUID();
+      const buildRelease = `account@${build.toString(16).padStart(40, "0")}`;
+
+      ids.push(id);
+      await instance.admin.sourceMapUpload.create({
+        data: {
+          id,
+          projectId,
+          release: buildRelease,
+          manifestHash: randomUUID(),
+          artifacts: {
+            create: Array.from({ length: 4 }, (_, part) => ({
+              projectId,
+              release: buildRelease,
+              path: `build-${build}-${part}.js`,
+              debugId: randomUUID(),
+              sha256: "a".repeat(64),
+              size: mapSize,
+              storageId: randomUUID(),
+            })),
+          },
+        },
+      });
+    }
+
+    const receipt = await beginUpload(
+      service,
+      headers,
+      projectId,
+      {
+        release: `account@${"d".repeat(40)}`,
+        artifacts: Array.from({ length: 4 }, (_, part) => ({
+          path: `new-${part}.js`,
+          debugId: randomUUID(),
+          sha256: "b".repeat(64),
+          size: mapSize,
+        })),
+      },
+      capacityStore,
+    );
+
+    ids.push(receipt.uploadId);
+    expect(receipt.status).toBe("receiving");
+  } finally {
+    await instance.admin.sourceMapUpload.deleteMany({
+      where: { id: { in: ids } },
+    });
+  }
 });
 
 it("registers MR metadata only through scoped CI authentication and preserves observed environments", async () => {

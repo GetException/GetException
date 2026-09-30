@@ -83,6 +83,7 @@ model Session {
   lastSeenAt DateTime @default(now()) @db.Timestamptz(3)
   user User @relation(fields:[userId],references:[id],onDelete:Cascade)
   @@index([userId])
+  @@index([expiresAt])
   @@map("session")
 }
 model Verification {
@@ -93,6 +94,7 @@ model Verification {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   @@index([identifier])
+  @@index([expiresAt])
   @@map("verification")
 }
 model Organization {
@@ -171,6 +173,7 @@ model Invitation {
   verifications InvitationVerification[]
   mail MailOutbox[]
   @@index([organizationId, createdAt])
+  @@index([status,expiresAt])
   @@map("invitation")
 }
 model InvitationTeam {
@@ -224,6 +227,8 @@ model MailOutbox {
   invitation Invitation @relation(fields:[invitationId], references:[id], onDelete:Cascade)
   @@unique([invitationId,kind])
   @@index([status,nextAttemptAt])
+  @@index([expiresAt])
+  @@index([status,createdAt])
   @@map("mail_outbox")
 }
 model RecoveryCode {
@@ -320,6 +325,7 @@ model EventInbox {
   @@unique([projectId,eventId])
   @@index([status,nextAttemptAt])
   @@index([status,leaseUntil])
+  @@index([status,receivedAt])
   @@map("event_inbox")
 }
 model Issue {
@@ -338,6 +344,7 @@ model Issue {
   @@unique([projectId,fingerprint])
   @@unique([id,projectId])
   @@index([projectId,status,lastSeen])
+  @@index([lastSeen])
   @@map("issue")
 }
 model ErrorEvent {
@@ -382,8 +389,10 @@ model Release {
   sourceMapsVersion Int @default(0)
   deployments ReleaseDeployment[]
   createdAt DateTime @default(now()) @db.Timestamptz(3)
+  lastActivityAt DateTime @default(now()) @db.Timestamptz(3)
   project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
   @@unique([projectId,name])
+  @@index([lastActivityAt])
   @@map("release")
 }
 model ReleaseDeployment {
@@ -405,6 +414,7 @@ model ProjectDailyStat {
   rejected Int @default(0)
   project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
   @@id([projectId,day])
+  @@index([day])
   @@map("project_daily_stat")
 }
 // Read-only SQL views; generated migrations deliberately exclude their models.
@@ -459,6 +469,7 @@ model SourceMapUpload {
   artifacts SourceArtifact[]
   @@unique([projectId,manifestHash])
   @@index([status,createdAt])
+  @@index([status,updatedAt])
   @@map("source_map_upload")
 }
 
@@ -493,5 +504,6 @@ model IssueActivity {
   project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
   @@index([projectId,fromIssueId])
   @@index([projectId,toIssueId])
+  @@index([createdAt])
   @@map("issue_activity")
 }

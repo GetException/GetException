@@ -12,6 +12,7 @@ describe("dashboard query boundaries", () => {
         environment: ["production", "staging"],
         page: "99999999",
         period: "forever",
+        source: "unknown",
       }),
     ).toMatchObject({
       q: "x".repeat(160),
@@ -20,10 +21,37 @@ describe("dashboard query boundaries", () => {
       environment: "all",
       page: 200,
       period: "all",
+      source: "all",
     });
     expect(pageNumber("-5")).toBe(1);
     expect(pageNumber("2.5")).toBe(1);
     expect(pageNumber(["1", "999"])).toBe(1);
+  });
+  it("filters source context within the selected release and environment", () => {
+    const member = {
+      id: "member",
+      role: "owner" as const,
+      organizationId: "current-workspace",
+    };
+    const scope = { environment: "staging", release: "account@abc" };
+
+    expect(
+      issueWhere(member, issueFilters({ ...scope, source: "mapped" })).events,
+    ).toEqual({
+      some: {
+        ...scope,
+        symbolicationState: { in: ["complete", "partial"] },
+      },
+    });
+    expect(
+      issueWhere(member, issueFilters({ ...scope, source: "unmapped" })).events,
+    ).toEqual({
+      some: scope,
+      none: {
+        ...scope,
+        symbolicationState: { in: ["complete", "partial"] },
+      },
+    });
   });
   it("keeps workspace scope when a project is supplied and matches environment and release on the same event", () => {
     const filters = issueFilters({

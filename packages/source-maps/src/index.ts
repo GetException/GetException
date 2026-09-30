@@ -1,5 +1,13 @@
 import { constants } from "node:fs";
-import { mkdir, open, rename, unlink, lstat, readdir } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  rename,
+  unlink,
+  lstat,
+  readdir,
+  statfs,
+} from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { SOURCE_MAP_LIMITS } from "@getexception/protocol";
@@ -17,6 +25,18 @@ export class SourceMapStore {
     }
 
     return join(this.root, `${id}.map`);
+  }
+
+  async availableBytes() {
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+
+    if (!(await lstat(this.root)).isDirectory()) {
+      throw new Error("Invalid artifact storage");
+    }
+
+    const storage = await statfs(this.root, { bigint: true });
+
+    return storage.bavail * storage.bsize;
   }
 
   async write(id: string, bytes: Uint8Array) {

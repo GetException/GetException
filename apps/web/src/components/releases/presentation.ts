@@ -25,9 +25,19 @@ export const SOURCE_MAP_STATES = {
     caption: "Stack traces show compiled locations",
     tone: "missing",
   },
+  removed: {
+    label: "Removed",
+    caption:
+      "Private maps were removed; previously mapped events keep their source context",
+    tone: "missing",
+  },
 } as const;
 
-export function sourceMapStatus(state: string) {
+export function sourceMapStatus(state: string, version = 0) {
+  if (state === "missing" && version > 0) {
+    return SOURCE_MAP_STATES.removed;
+  }
+
   return (
     SOURCE_MAP_STATES[state as keyof typeof SOURCE_MAP_STATES] ??
     SOURCE_MAP_STATES.missing

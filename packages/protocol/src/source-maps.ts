@@ -4,8 +4,9 @@ export const SOURCE_MAP_LIMITS = {
   files: 128,
   fileBytes: 16 * 1024 * 1024,
   releaseBytes: 128 * 1024 * 1024,
-  projectBytes: 1024 * 1024 * 1024,
-  installationBytes: 10 * 1024 * 1024 * 1024,
+  projectBytes: 4 * 1024 * 1024 * 1024,
+  installationBytes: 8 * 1024 * 1024 * 1024,
+  diskReserveBytes: 5 * 1024 * 1024 * 1024,
   manifestBytes: 64 * 1024,
 } as const;
 

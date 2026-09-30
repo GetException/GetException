@@ -26,6 +26,8 @@ REPOSITORY = "GetException/GetException"
 WORKFLOW = REPOSITORY + "/.github/workflows/release.yml"
 FILES = {"compose.yaml", "Caddyfile", "init-db.sh", "getexception.py", ".env.example", "release.json"}
 SERVICES = ["web", "ingest", "worker-events", "worker-retention", "worker-mail"]
+IMAGE_REPOSITORIES = {"ghcr.io/getexception/getexception-" + name
+                      for name in ["web", "ingest", "worker", "mail", "migrate"]}
 SECRET_KEYS = ["POSTGRES_PASSWORD", "MIGRATE_PASSWORD", "WEB_PASSWORD", "INGEST_PASSWORD",
                "WORKER_PASSWORD", "MAIL_PASSWORD", "BACKUP_PASSWORD", "BETTER_AUTH_SECRET",
                "TOTP_ENCRYPTION_KEY", "AUTH_RATE_KEY", "MAIL_ENCRYPTION_KEY"]
@@ -294,6 +296,56 @@ class Installation:
             raise Failure("Database backup is empty.")
         return target
 
+    def prune_images(self, *, dry_run=False):
+        if self.pending.exists():
+            raise Failure("An unfinished operation prevents image cleanup.")
+        state = json.loads((self.runtime / "state.json").read_text())
+        current = self.current()
+        if current is None or state.get("current") != current.name:
+            raise Failure("Current release and state.json disagree; image cleanup stopped.")
+        previous = state.get("previous")
+        if previous is not None and not SHA.fullmatch(previous):
+            raise Failure("Invalid previous release; image cleanup stopped.")
+        protected = {current}
+        if previous:
+            prior = self.root / "releases" / previous
+            if not prior.is_dir():
+                raise Failure("Previous release is missing; image cleanup stopped.")
+            protected.add(prior)
+
+        references = {reference for release in protected
+                      for reference in metadata(release, release.name)["images"].values()}
+        ids = run(["docker", "image", "inspect", *sorted(references), "--format", "{{.Id}}"],
+                  env=docker_environment()).splitlines()
+        if len(ids) != len(references) or any(not re.fullmatch(r"sha256:[a-f0-9]{64}", image) for image in ids):
+            raise Failure("Protected release images are unavailable; image cleanup stopped.")
+        protected_ids = set(ids)
+
+        containers = run(["docker", "container", "ls", "-aq"], env=docker_environment()).splitlines()
+        if containers:
+            attached = run(["docker", "container", "inspect", *containers, "--format", "{{.Image}}"],
+                           env=docker_environment()).splitlines()
+            if len(attached) != len(containers) or any(not re.fullmatch(r"sha256:[a-f0-9]{64}", image) for image in attached):
+                raise Failure("Container image references are unavailable; image cleanup stopped.")
+            protected_ids.update(attached)
+
+        listing = run(["docker", "image", "ls", "-a", "--no-trunc", "--format", "{{json .}}"],
+                      env=docker_environment())
+        candidates = set()
+        for line in listing.splitlines():
+            image = json.loads(line)
+            identifier = image.get("ID", "")
+            if (image.get("Repository") in IMAGE_REPOSITORIES and image.get("Tag") == "<none>"
+                    and re.fullmatch(r"sha256:[a-f0-9]{64}", identifier)
+                    and identifier not in protected_ids):
+                candidates.add(identifier)
+
+        if not dry_run:
+            for identifier in sorted(candidates):
+                run(["docker", "image", "rm", identifier], env=docker_environment(),
+                    stdout=subprocess.DEVNULL)
+        return len(candidates)
+
     def ready(self, release, *, defer_ingest_dns=False):
         self.compose(release, "up", "-d", "--wait", "--wait-timeout", "180", "--no-deps", *SERVICES)
         self.compose(release, "up", "-d", "--wait", "--wait-timeout", "90", "--no-deps", "caddy")
@@ -407,6 +459,10 @@ class Installation:
             print("Dashboard is ready. Public ingest DNS/HTTPS verification is pending; keep automatic deployment disabled.")
         else:
             print("Release " + target.name + " is ready. Existing accounts and data are preserved.")
+        try:
+            print("Old GetException images removed: " + str(self.prune_images()))
+        except (Failure, OSError, ValueError) as exc:
+            print("Image cleanup skipped after successful deploy: " + str(exc), file=sys.stderr)
 
     def rollback(self):
         if self.pending.exists():
@@ -459,7 +515,7 @@ def prerequisites():
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["install", "update", "rollback", "status", "backup", "smoke"])
+    parser.add_argument("command", choices=["install", "update", "rollback", "status", "backup", "smoke", "prune-images"])
     parser.add_argument("--install-dir", default="/opt/getexception")
     parser.add_argument("--release")
     parser.add_argument("--archive-url")
@@ -470,6 +526,7 @@ def main():
     parser.add_argument("--require-ingestion-smoke", action="store_true")
     parser.add_argument("--dashboard-host")
     parser.add_argument("--ingest-host")
+    parser.add_argument("--dry-run", action="store_true", help="List eligible image count without removing images")
     options = parser.parse_args()
     if options.defer_ingest_dns and (options.command != "install" or options.require_ingestion_smoke or options.skip_start):
         raise Failure("--defer-ingest-dns requires install without --skip-start or --require-ingestion-smoke.")
@@ -503,7 +560,10 @@ def main():
             current = installation.current()
             if current is None:
                 raise Failure("No installation found.")
-            if options.command == "rollback":
+            if options.command == "prune-images":
+                print("Old GetException images " + ("eligible" if options.dry_run else "removed") +
+                      ": " + str(installation.prune_images(dry_run=options.dry_run)))
+            elif options.command == "rollback":
                 installation.rollback()
             elif options.command == "backup":
                 print("Backup saved: " + str(installation.backup(current)))
