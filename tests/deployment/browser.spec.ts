@@ -72,9 +72,15 @@ test("installed release: setup, real SDK events and preserved login", async ({
     );
     await page.getByRole("link", { name: /I saved my codes/ }).click();
     phase = "login";
+    await expect(page.locator(".auth-intro")).toBeVisible();
     await page.getByLabel("Email", { exact: true }).fill(email);
     await page.getByLabel("Password", { exact: true }).fill(password);
+    const login = page.waitForResponse((response) =>
+      response.url().endsWith("/api/auth/login"),
+    );
+
     await fillOtp(page, totp(secret, BigInt(Math.floor(Date.now() / 30_000))));
+    expect((await login).status()).toBe(200);
     await expect(
       page.getByRole("heading", { name: "Overview." }),
     ).toBeVisible();

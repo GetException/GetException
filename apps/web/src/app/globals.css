@@ -479,6 +479,43 @@ td {
   font-size: 32px;
   margin-bottom: 15px;
 }
+.auth-shell-split {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+.auth-intro {
+  padding: 50px 60px;
+  background: radial-gradient(
+    ellipse at 10% 60%,
+    #262039 0%,
+    #14121c 40%,
+    #101115 80%
+  );
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-right: 1px solid var(--border);
+}
+.auth-intro h1 {
+  font-size: clamp(38px, 4.3vw, 65px);
+  line-height: 1.09;
+  margin: 25px 0;
+  letter-spacing: -2.6px;
+}
+.auth-intro p {
+  color: #9792aa;
+  font-size: 16px;
+  line-height: 1.8;
+}
+.auth-shell-split .auth-panel {
+  margin: auto;
+  max-width: 560px;
+  padding: 50px 45px;
+}
+.auth-shell-split .auth-panel h2 {
+  font-size: 27px;
+  margin-bottom: 15px;
+}
 .steps {
   display: flex;
   flex-wrap: wrap;
@@ -678,6 +715,12 @@ input.otp-cell {
   .brand {
     font-size: 17px;
   }
+  .auth-intro {
+    padding: 35px;
+  }
+  .auth-shell-split .otp-input {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
   .section-heading form {
     display: flex;
   }
@@ -730,8 +773,23 @@ input.otp-cell {
     min-height: 70px;
     padding: 0 24px;
   }
+  .auth-shell-split {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .auth-intro {
+    padding: 22px 28px;
+    border: 0;
+  }
+  .auth-intro > div,
+  .auth-intro > span {
+    display: none;
+  }
   .auth-panel {
     padding: 40px 24px 64px;
+  }
+  .auth-shell-split .auth-panel {
+    padding: 32px 28px;
   }
   .authenticator-setup {
     grid-template-columns: 1fr;

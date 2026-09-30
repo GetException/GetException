@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useEffect,
   useId,
   useRef,
   useState,
@@ -27,6 +28,25 @@ export function OtpInput({
   const [digits, setDigits] = useState(() => Array<string>(DIGITS).fill(""));
   const inputs = useRef<Array<HTMLInputElement | null>>([]);
   const lastSubmitted = useRef("");
+  const value = digits.join("");
+
+  useEffect(() => {
+    if (
+      !autoSubmit ||
+      value.length !== DIGITS ||
+      lastSubmitted.current === value
+    ) {
+      return;
+    }
+
+    const form = inputs.current[0]?.form;
+
+    // Submit after React has committed the last digit to the hidden form field.
+    if (form?.reportValidity()) {
+      lastSubmitted.current = value;
+      form.requestSubmit();
+    }
+  }, [autoSubmit, value]);
 
   function update(next: string[], focus?: number) {
     const value = next.join("");
@@ -41,19 +61,6 @@ export function OtpInput({
       inputs.current[focus]?.focus();
       inputs.current[focus]?.select();
     }
-
-    if (!autoSubmit || value.length !== DIGITS) {
-      return;
-    }
-
-    window.setTimeout(() => {
-      const form = inputs.current[0]?.form;
-
-      if (form?.checkValidity() && lastSubmitted.current !== value) {
-        lastSubmitted.current = value;
-        form.requestSubmit();
-      }
-    });
   }
 
   function fillFrom(index: number, value: string) {
@@ -142,7 +149,7 @@ export function OtpInput({
           />
         ))}
       </div>
-      <input type="hidden" name={name} value={digits.join("")} />
+      <input type="hidden" name={name} value={value} />
     </Field.Root>
   );
 }
