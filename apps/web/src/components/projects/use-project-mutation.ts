@@ -19,6 +19,7 @@ export function useProjectMutation() {
 
         throw new Error(
           "Confirm your identity below, then submit again. Your changes are still here.",
+          { cause: error },
         );
       }
 

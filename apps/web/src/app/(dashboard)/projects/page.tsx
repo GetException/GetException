@@ -68,7 +68,7 @@ export default async function ProjectsPage({
         }
       />
       <section className="panel">
-        <form method="get" className="filters">
+        <form key={q} method="get" className="filters">
           <label className="filter-field search-field">
             Search projects
             <input

@@ -99,7 +99,7 @@ export default async function ReleasesPage({
             </Link>
           ))}
         </nav>
-        <form className="filters" method="get">
+        <form key={JSON.stringify(filters)} className="filters" method="get">
           <input type="hidden" name="environment" value={environment} />
           {review && <input type="hidden" name="review" value={review} />}
           <label className="filter-field search-field">

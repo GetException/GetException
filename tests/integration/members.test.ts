@@ -125,8 +125,6 @@ beforeAll(async () => {
     BETTER_AUTH_SECRET: token(),
     TOTP_ENCRYPTION_KEY: token(),
     AUTH_RATE_KEY: token(),
-    MAIL_ENCRYPTION_KEY: token(),
-    MAIL_ENABLED: false,
   });
   invitations = new InvitationService(service);
 });

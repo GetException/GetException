@@ -99,7 +99,8 @@ class CaddyUploadTests(unittest.TestCase):
                         (base + upload, 32 * 1024, 200),
                         (base + upload + artifact, 476923, 200),
                         (base + upload + artifact, 16 * 1024 * 1024, 200),
-                        (base + upload + artifact, 16 * 1024 * 1024 + 1, 413),
+                        (base + upload + artifact, 16 * 1024 * 1024 + 65536, 200),
+                        (base + upload + artifact, 16 * 1024 * 1024 + 65537, 413),
                         # Caddy's `KB` suffix is decimal; stay clearly below 16 KB.
                         ("/api/dashboard/projects", 15 * 1024, 200),
                         ("/api/dashboard/projects", 16 * 1024 + 1, 413),

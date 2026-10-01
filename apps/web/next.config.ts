@@ -6,7 +6,6 @@ const config: NextConfig = {
     "@getexception/db",
     "@getexception/config",
     "@getexception/protocol",
-    "@getexception/mail",
   ],
   serverExternalPackages: ["argon2", "pg", "@prisma/adapter-pg"],
   experimental: { cpus: 2 },

@@ -160,7 +160,6 @@ async function start() {
     process.stdout.write(
       `GetException is ready: ${stack.origins.dashboard}/${stack.installed ? "login" : "setup"}\n`,
     );
-    process.stdout.write(`Local email inbox: ${stack.origins.mail}\n`);
 
     if (!stack.installed) {
       process.stdout.write(

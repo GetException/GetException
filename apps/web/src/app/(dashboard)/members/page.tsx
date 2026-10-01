@@ -85,7 +85,7 @@ export default async function MembersPage({
         description="Workspace membership, access roles, and account protection."
       />
       <section className="panel">
-        <form className="filters" method="get">
+        <form key={q} className="filters" method="get">
           <label className="filter-field search-field">
             Search members
             <input

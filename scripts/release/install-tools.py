@@ -14,10 +14,11 @@ directory = Path(".artifacts/tools").resolve()
 directory.mkdir(parents=True, exist_ok=True)
 if platform.machine() not in ["x86_64", "amd64"]:
     raise RuntimeError("Tool pins currently cover amd64; install actionlint/gitleaks from verified sources on other architectures")
-for name in sys.argv[1:] or ["actionlint", "gitleaks"]:
+for name in sys.argv[1:] or ["actionlint", "gitleaks", "age"]:
     pin = pins[name]
     arch, expected = pin[sys.platform]
-    filename = f"{name}_{pin['version']}_{sys.platform}_{arch}.tar.gz"
+    archive_platform = pin.get("platforms", {}).get(sys.platform, sys.platform)
+    filename = pin.get("archive", "{name}_{version}_{platform}_{arch}.tar.gz").format(name=name, version=pin['version'], platform=archive_platform, arch=arch)
     url = f"https://github.com/{pin['repository']}/releases/download/v{pin['version']}/{filename}"
     with tempfile.TemporaryDirectory() as temporary:
         archive = Path(temporary) / filename
@@ -26,13 +27,14 @@ for name in sys.argv[1:] or ["actionlint", "gitleaks"]:
         if hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
             raise RuntimeError("Tool checksum failed: " + name)
         with tarfile.open(archive, "r:gz") as bundle:
-            member = bundle.getmember(name)
-            if not member.isfile() or member.size > 300_000_000:
-                raise RuntimeError("Invalid tool binary")
-            target = directory / (name + ".next")
-            with bundle.extractfile(member) as source, target.open("wb") as output:
-                import shutil
-                shutil.copyfileobj(source, output)
-        os.chmod(target, 0o700)
-        os.replace(target, directory / name)
+            for executable, member_name in pin.get("members", {name: name}).items():
+                member = bundle.getmember(member_name)
+                if not member.isfile() or member.size > 300_000_000:
+                    raise RuntimeError("Invalid tool binary")
+                target = directory / (executable + ".next")
+                with bundle.extractfile(member) as source, target.open("wb") as output:
+                    import shutil
+                    shutil.copyfileobj(source, output)
+                os.chmod(target, 0o700)
+                os.replace(target, directory / executable)
     print(name + " " + pin["version"] + " verified and installed.")

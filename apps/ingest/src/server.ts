@@ -78,6 +78,11 @@ export function createIngestServer(db: IngestDatabase, options: IngestOptions) {
           ? String(req.headers["x-real-ip"] ?? "unknown")
           : (req.socket.remoteAddress ?? "unknown");
 
+        // Bound aggregate parsing, hashing and DB work even when clients rotate IPs.
+        if (!limiter.take("installation", 100, 200)) {
+          return respond(res, 429);
+        }
+
         if (
           !limiter.take(
             `ip:${hash(ip)}`,
@@ -139,6 +144,16 @@ export function createIngestServer(db: IngestDatabase, options: IngestOptions) {
           return respond(res, 403);
         }
 
+        const rejectCapacity = async () => {
+          try {
+            await db.$executeRaw`SELECT record_ingest_rejection(${match[1]!}, ${hash(key!)})`;
+          } catch {
+            // Preserve backpressure even if the database cannot record its counter.
+          }
+
+          return respond(res, 429);
+        };
+
         try {
           const configs = await db.ingestionConfig.findMany({
             where: { projectId: match[1], keyHash: hash(key) },
@@ -158,6 +173,10 @@ export function createIngestServer(db: IngestDatabase, options: IngestOptions) {
           if (origin) {
             res.setHeader("Access-Control-Allow-Origin", origin);
             res.setHeader("Vary", "Origin");
+            res.setHeader(
+              "Access-Control-Expose-Headers",
+              "Retry-After, X-Sentry-Rate-Limits",
+            );
           }
 
           if (req.method === "OPTIONS") {
@@ -191,7 +210,7 @@ export function createIngestServer(db: IngestDatabase, options: IngestOptions) {
           }
 
           if (!limiter.take(`project:${match[1]}`, 20, 50)) {
-            return respond(res, 429);
+            return rejectCapacity();
           }
 
           const encoding = req.headers["content-encoding"];
@@ -248,7 +267,7 @@ export function createIngestServer(db: IngestDatabase, options: IngestOptions) {
             ["P2004", "P2010", "P2039"].includes(error.code) &&
             JSON.stringify(error.meta ?? {}).includes("ingest_capacity")
           ) {
-            return respond(res, 429);
+            return rejectCapacity();
           }
 
           respond(res, 503);

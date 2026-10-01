@@ -1139,6 +1139,36 @@ tbody tr:hover {
 .issues-table {
   min-width: 1120px;
 }
+.issues-table td:first-child {
+  width: 42%;
+  min-width: 400px;
+  white-space: normal;
+}
+.issue-cell .issue-build-context,
+.issue-cell .issue-no-event {
+  margin: 8px 0 0 39px;
+}
+.issue-cell .issue-build-context {
+  gap: 5px 7px;
+}
+.issue-cell .environment-badge,
+.issue-cell .review-badge,
+.issue-cell .pill {
+  padding: 2px 6px;
+  font-size: 10px;
+}
+.issue-cell .environment-badge::before {
+  width: 5px;
+  height: 5px;
+}
+.issue-cell .issue-build-context .text-link,
+.issue-cell .issue-build-context .mono,
+.issue-cell .issue-no-event {
+  font-size: 10px;
+}
+.issue-cell .issue-no-event {
+  display: block;
+}
 .issue-trend {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr) 110px;

@@ -24,6 +24,5 @@ jobs:
       - run: corepack enable
       - run: yarn install --immutable
       - run: yarn ci:tools
-      - run: yarn local:mailpit
       - run: bash scripts/release/install-browser.sh
       - run: yarn checks

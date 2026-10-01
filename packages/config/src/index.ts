@@ -3,11 +3,6 @@ import { parseGitlabTrust } from "./gitlab-ci";
 
 export { parseGitlabTrust, gitlabTrustSchema } from "./gitlab-ci";
 
-const mailEnabled = z
-  .enum(["true", "false"])
-  .default("true")
-  .transform((value) => value === "true");
-
 const httpsOrigin = z
   .string()
   .url()
@@ -33,8 +28,6 @@ export function webConfig(
       BETTER_AUTH_SECRET: z.string().min(32),
       TOTP_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/),
       AUTH_RATE_KEY: z.string().regex(/^[a-f0-9]{64}$/),
-      MAIL_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/),
-      MAIL_ENABLED: mailEnabled,
       GITLAB_CI_TRUST: z.string().max(65536).optional(),
     })
     .parse(env);
@@ -52,13 +45,11 @@ export function webConfig(
   }
 
   if (
-    [
+    new Set([
       config.TOTP_ENCRYPTION_KEY,
       config.AUTH_RATE_KEY,
       config.BETTER_AUTH_SECRET,
-    ].includes(config.MAIL_ENCRYPTION_KEY) ||
-    config.TOTP_ENCRYPTION_KEY === config.AUTH_RATE_KEY ||
-    config.TOTP_ENCRYPTION_KEY === config.BETTER_AUTH_SECRET
+    ]).size !== 3
   ) {
     throw new Error("Use separate encryption and authentication keys");
   }
@@ -70,42 +61,6 @@ export function workerConcurrency(
   value = process.env.WORKER_CONCURRENCY ?? "4",
 ) {
   return z.coerce.number().int().min(1).max(16).parse(value);
-}
-
-export function mailConfig(
-  env: Record<string, string | undefined> = process.env,
-) {
-  const base = z
-    .object({
-      DATABASE_URL: z.string().min(1),
-      MAIL_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/),
-      MAIL_ENABLED: mailEnabled,
-    })
-    .parse(env);
-
-  if (!base.MAIL_ENABLED) {
-    return { ...base, MAIL_ENABLED: false as const };
-  }
-
-  const config = z
-    .object({
-      SMTP_HOST: z.string().min(1),
-      SMTP_PORT: z.coerce.number().int().min(1).max(65535),
-      SMTP_MODE: z.enum(["tls", "starttls", "local"]).default("starttls"),
-      SMTP_USER: z.string().optional(),
-      SMTP_PASSWORD: z.string().optional(),
-      SMTP_FROM: z.string().email(),
-    })
-    .parse(env);
-
-  if (
-    config.SMTP_MODE === "local" &&
-    !["127.0.0.1", "localhost", "mailpit"].includes(config.SMTP_HOST)
-  ) {
-    throw new Error("Unencrypted SMTP is limited to the local mail catcher");
-  }
-
-  return { ...base, ...config, MAIL_ENABLED: true as const };
 }
 
 const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);

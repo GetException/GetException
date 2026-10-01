@@ -86,20 +86,17 @@ class InstallerTests(unittest.TestCase):
             token = (self.root / "runtime/setup-token").read_bytes()
             second = installer.configure(self.root, options)
         self.assertEqual(first, second)
-        self.assertEqual(first["SMTP_PASSWORD"], env["SMTP_PASSWORD"])
-        self.assertEqual(first["MAIL_ENABLED"], "true")
+        self.assertFalse(any(key.startswith(("SMTP_", "MAIL_")) for key in first))
         self.assertEqual(token, (self.root / "runtime/setup-token").read_bytes())
         self.assertEqual((self.root / "runtime/.env").stat().st_mode & 0o777, 0o600)
         self.assertEqual(len({first[key] for key in installer.SECRET_KEYS}), len(installer.SECRET_KEYS))
 
-    def test_fresh_installation_without_smtp_keeps_email_disabled_across_reinstallation(self):
+    def test_fresh_installation_ignores_retired_smtp_configuration(self):
         options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
         with patch.dict(os.environ, {}, clear=True):
             first = installer.configure(self.root, options)
         self.assertEqual(first["ACME_EMAIL"], "")
-        self.assertEqual(first["MAIL_ENABLED"], "false")
-        self.assertEqual(first["SMTP_HOST"], "")
-        self.assertEqual(first["SMTP_FROM"], "")
+        self.assertFalse(any(key.startswith(("SMTP_", "MAIL_")) for key in first))
         token = (self.root / "runtime/setup-token").read_bytes()
         with patch.dict(os.environ, {"MAIL_ENABLED": "true", "SMTP_HOST": "smtp.example.com",
                                      "SMTP_FROM": "monitor@example.com"}, clear=True):
@@ -116,17 +113,14 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse((self.root / "runtime/.env").exists())
             self.assertFalse((self.root / "runtime/setup-token").exists())
 
-    def test_enabled_email_requires_valid_smtp_before_writing_configuration(self):
-        options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
-        valid = {"ACME_EMAIL": "admin@example.com", "MAIL_ENABLED": "true",
-                 "SMTP_HOST": "smtp.example.com", "SMTP_FROM": "monitor@example.com"}
-        for invalid in [{"SMTP_HOST": ""}, {"SMTP_FROM": ""}, {"SMTP_PORT": "0"},
-                        {"SMTP_MODE": "local"}, {"MAIL_ENABLED": "no"}]:
-            with self.subTest(invalid=invalid), patch.dict(os.environ, {**valid, **invalid}, clear=True):
-                with self.assertRaises(installer.Failure):
-                    installer.configure(self.root, options)
-            self.assertFalse((self.root / "runtime/.env").exists())
-            self.assertFalse((self.root / "runtime/setup-token").exists())
+    def test_new_runtime_has_no_mail_service_and_old_metadata_remains_readable(self):
+        legacy = self.release()
+        installation = SimulatedInstallation(self.root)
+        self.assertIn("worker-mail", installation.services(legacy))
+        info = installer.metadata(legacy)
+        del info["images"]["mail"]
+        installer.write_json(legacy / "release.json", info)
+        self.assertNotIn("worker-mail", installation.services(legacy))
 
     def test_rejects_weak_reused_and_invalid_configuration(self):
         options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
@@ -153,9 +147,20 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(json.loads((self.root / "runtime/state.json").read_text())["previous"], old.name)
         self.assertFalse(installation.pending.exists())
         operations = [args for _, args in installation.calls]
+        self.assertLess(operations.index(("backup",)), operations.index(("up", "-d", "--wait", "--wait-timeout", "120", "postgres")))
         self.assertLess(operations.index(("backup",)), operations.index(("run", "--rm", "--no-deps", "migrate")))
         self.assertLess(operations.index(("run", "--rm", "--no-deps", "migrate")), operations.index(("ready",)))
         self.assertEqual(operations[-1], ("prune-images",))
+
+    def test_failed_backup_does_not_replace_database_or_stop_the_old_release(self):
+        installation, old = self.active()
+        target = self.release()
+        with patch.object(installation, "backup", side_effect=installer.Failure("backup failed")):
+            with self.assertRaisesRegex(installer.Failure, "backup failed"):
+                installation.deploy(target)
+        self.assertEqual(installation.current(), old)
+        self.assertFalse(installation.pending.exists())
+        self.assertFalse(any(args[0] in ["up", "stop"] for _, args in installation.calls))
 
     def test_health_failure_restores_previous_release_and_reports_failure(self):
         installation, old = self.active()
@@ -357,7 +362,7 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(installer.Failure, "Expanded"):
             installer.extract_archive(path, self.root / "unpack")
 
-    def test_compose_preserves_literal_smtp_password(self):
+    def test_compose_preserves_literal_configuration_values(self):
         executable = ROOT / ".artifacts/tools/docker-compose"
         command = [str(executable)] if executable.exists() else (["docker", "compose"] if shutil.which("docker") else None)
         if command is None:

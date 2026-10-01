@@ -46,7 +46,6 @@ for (const app of ["ingest", "worker", "migrate"]) {
       app === "worker"
         ? {
             main: "apps/worker/src/main.ts",
-            mail: "apps/worker/src/mail/main.ts",
             symbolication: "apps/worker/src/source-maps/symbolication.ts",
           }
         : [`apps/${app}/src/main.ts`],
@@ -57,7 +56,7 @@ for (const app of ["ingest", "worker", "migrate"]) {
     clean: true,
     sourcemap: false,
     noExternal: [/^@getexception\//],
-    external: ["@prisma/adapter-pg", "@prisma/client", "pg", "nodemailer"],
+    external: ["@prisma/adapter-pg", "@prisma/client", "pg"],
   });
 }
 

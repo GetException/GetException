@@ -8,8 +8,12 @@ export async function resolveFrames(
   projectId: string,
   event: SafeEvent,
   store = new SourceMapStore(),
+  previousFrames: readonly (OriginalFrame | null)[] = [],
 ) {
-  const originalFrames: (OriginalFrame | null)[] = event.frames.map(() => null);
+  // Retention or a failed/partial upload must not erase source context already restored.
+  const originalFrames = event.frames.map(
+    (_, index) => previousFrames[index] ?? null,
+  );
   const release = event.release
     ? await db.release.findUnique({
         where: { projectId_name: { projectId, name: event.release } },
@@ -61,7 +65,9 @@ export async function resolveFrames(
         );
 
         result.forEach((frame, offset) => {
-          originalFrames[indexes[offset]!] = frame;
+          if (frame) {
+            originalFrames[indexes[offset]!] = frame;
+          }
         });
       } catch {
         failed = true;

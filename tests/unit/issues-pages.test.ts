@@ -97,15 +97,21 @@ beforeEach(() => {
   issueTrend.mockResolvedValue([{ date: "2026-09-21", count: 2 }]);
 });
 
-it("shows the latest retained build and opens that event from the Issues list", async () => {
+it("shows compact build context below the issue title and opens the retained event", async () => {
   const html = renderToStaticMarkup(
     await IssuesPage({ searchParams: Promise.resolve({}) }),
   );
+  const issueCell = html.match(
+    /<td><div class="issue-cell">([\s\S]*?)<\/div><\/td>/,
+  )?.[1];
 
-  expect(html).toContain("Latest retained event");
-  expect(html).toContain("Preview / staging");
-  expect(html).toContain("MR !554");
-  expect(html).toContain("Compiled stack");
+  expect(html).not.toContain("<th>Latest retained event</th>");
+  expect(issueCell).toContain("Preview / staging");
+  expect(issueCell).toContain("MR !554");
+  expect(issueCell).toContain("Compiled stack");
+  expect(issueCell?.indexOf(issue.title)).toBeLessThan(
+    issueCell?.indexOf("Preview / staging") ?? 0,
+  );
   expect(html).toContain("Has source context");
   expect(html).toContain(`/issues/issue?event=${selected.eventId}`);
   expect(latestIssueEvents).toHaveBeenCalledWith(
@@ -113,6 +119,18 @@ it("shows the latest retained build and opens that event from the Issues list", 
     [issue.id],
     expect.objectContaining({ environment: "all" }),
   );
+});
+
+it("shows the missing retained event note below the issue title", async () => {
+  latestIssueEvents.mockResolvedValueOnce([]);
+  const html = renderToStaticMarkup(
+    await IssuesPage({ searchParams: Promise.resolve({}) }),
+  );
+
+  expect(html).toContain(
+    '<span class="muted issue-no-event">No retained event</span>',
+  );
+  expect(html).not.toContain("issue-build-context");
 });
 
 it("shows selected-event MR build context and recent activity on the issue", async () => {

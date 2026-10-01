@@ -1,16 +1,16 @@
 # Проверки
 
-Все команды запускаются из корня с Node 24.20.0 и Yarn 4.17.1. `yarn checks` — обязательная проверка перед любым коммитом. Эта реализация не создаёт коммитов и не публикует пакеты.
+Все команды запускаются из корня с Node 24.21.0 и Yarn 4.17.1. `yarn checks` — обязательная проверка перед любым коммитом. Эта реализация не создаёт коммитов и не публикует пакеты.
 
 ```bash
 yarn install --immutable
-yarn local:mailpit
+yarn ci:tools
 yarn checks
 yarn test:e2e
 docker compose config --quiet
 ```
 
-`checks` последовательно выполняет Prettier, ESLint, architecture check, проверки установщика/workflow/секретов/лицензий, аудит зависимостей, обе генерации Prisma client, TypeScript, unit tests, сборку серверов/SDK/Next.js/fixtures, npm-alias smoke и интеграционные тесты. На Linux он также запускает Docker bootstrap/update/rollback/restore test; в CI Docker обязателен. На macOS контейнерный тест явно пропускается. Нужны доступ к registry, проверенные инструменты из `yarn ci:tools`, Mailpit и разрешение локальных сокетов. Запущенный продукт и его runtime secrets не используются. `yarn test:integration` доступен отдельно для повторной проверки серверных изменений.
+`checks` последовательно выполняет Prettier, ESLint, architecture check, проверки установщика/workflow/секретов/лицензий, аудит зависимостей, обе генерации Prisma client, TypeScript, unit tests, сборку серверов/SDK/Next.js/fixtures, npm-alias smoke и интеграционные тесты. На Linux он также запускает Docker bootstrap/update/rollback/restore test; в CI Docker обязателен. На macOS контейнерный тест явно пропускается. Нужны доступ к registry, проверенные инструменты из `yarn ci:tools` и разрешение локальных сокетов. Запущенный продукт и его runtime secrets не используются. `yarn test:integration` доступен отдельно для повторной проверки серверных изменений.
 
 ## Форматирование и читаемость
 
@@ -34,13 +34,13 @@ Architecture check разбирает imports/exports/require/dynamic import ч�
 
 Альтернатива — `INTEGRATION_ADMIN_URL` на **пустой выделенный PostgreSQL cluster** с БД, имя которой заканчивается `_test`. Тест отказывается использовать cluster с существующими GetException runtime roles. Нужен test-only superuser для создания ролей и отдельной upgrade DB. Внешний cluster не удаляется автоматически; после теста уничтожьте его операторским способом. Никогда не указывайте рабочую БД.
 
-Проверяются setup pending/atomic activation/rollback/concurrency/repeat denial, AES binding к состоянию и user, TOTP replay, recovery one-use, trusted-device/email OTP rejection, общие rate buckets, настоящие Better Auth cookies и transaction context, step-up concurrency/freshness, no-store, audit privacy. Вторая группа проверяет реальные SQL grants, readiness rollback, отключённое соединение БД → 503, sanitizer/durable ack/idempotence/CORS/429, параллельные workers, stale lease fencing, retry/dead-letter и retention. Отдельно проверяются Resolve/Reopen, идемпотентность, права изменения только status/regression, отказ при устаревшем счётчике, Regression при новом событии и конкурентной блокировке. Миграции проверяются на пустой БД и при последовательном обновлении четырёх версий с данными.
+Проверяются setup pending/atomic activation/rollback/concurrency/repeat denial, AES binding к состоянию и user, TOTP replay, recovery one-use, trusted-device/email OTP rejection, общие rate buckets, настоящие Better Auth cookies и transaction context, step-up concurrency/freshness, no-store, audit privacy. Вторая группа проверяет реальные SQL grants, readiness rollback, отключённое соединение БД → 503, sanitizer/durable ack/idempotence/CORS/429, параллельные workers, stale lease fencing, retry/dead-letter и retention. Отдельно проверяются Resolve/Reopen, идемпотентность, права изменения только status/regression, отказ при устаревшем счётчике, Regression при новом событии и конкурентной блокировке. Миграции проверяются на пустой БД и при последовательном обновлении до текущей версии с данными.
 
 Отдельный integration-тест постоянного локального запуска создаёт аккаунт с MFA, сессию, проект, ключ и событие, останавливает настоящий PostgreSQL и запускает его с сохранённой конфигурацией. Проверяются прежняя сессия и вход с прежним TOTP, сохранность данных/ключей, закрытый setup и права `0600`. Unit-тесты проверяют отказ от генерации новых ключей при утрате конфигурации и исключение чужих секретов из окружения дочерних процессов.
 
 ## Playwright через Caddy HTTPS
 
-Сначала выполните `yarn checks`. Нужны Chromium, Python 3 (очистка failure trace) и **Caddy 2.10.2**, установленный оператором из официального release с проверкой SHA512 из соответствующего release checksums файла. Укажите абсолютный путь:
+Сначала выполните `yarn checks`. Нужны Chromium, Python 3 (очистка failure trace) и **Caddy 2.11.4**. Команда `python3 scripts/release/install-tools.py caddy` проверяет закреплённый SHA-256 официального release и устанавливает бинарник в `.artifacts/tools`. Для другого проверенного бинарника укажите абсолютный путь:
 
 ```bash
 yarn playwright install chromium
@@ -95,4 +95,4 @@ Node 24.4.0, Yarn 4.17.1, Darwin x64, Chromium build 1208. Native PostgreSQL и�
 
 Docker Engine на этом Mac отсутствует: Linux Docker build/start, restore в контейнере, опубликованный bootstrap/npm provenance и CI→SSH здесь не запускались. Они подготовлены в обязательных GitHub Actions jobs; это не отчёт об их успешном прохождении. Реальный сервер не изменялся, локальный Owner и его данные сохранены.
 
-`yarn test:compose` на Linux создаёт отдельный случайный Compose project и временный каталог. Он проверяет регистрацию Owner/TOTP, пять SDK событий и группировку, совместимое обновление/откат, сохранение сессии, backup и восстановление в пустую БД. После теста удаляются только его собственные volumes. Registry/bootstrap jobs повторяют сценарий с опубликованными артефактами. Подключение реального SMTP, публичного TLS и SSH выполняется на этапе развёртывания по [инструкции](deployment.md).
+`yarn test:compose` на Linux создаёт отдельный случайный Compose project и временный каталог. Он проверяет регистрацию Owner/TOTP, пять SDK событий и группировку, совместимое обновление/откат, сохранение сессии, backup и восстановление в пустую БД. После теста удаляются только его собственные volumes. Registry/bootstrap jobs повторяют сценарий с опубликованными артефактами. Подключение внешнего backup, публичного TLS и SSH выполняется на этапе развёртывания по [инструкции](deployment.md).

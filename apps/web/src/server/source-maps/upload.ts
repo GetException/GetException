@@ -10,6 +10,7 @@ import type { Transaction } from "@getexception/db";
 import { SourceMapStore } from "@getexception/source-maps";
 import type { AuthService } from "../auth-service";
 import { AuthError } from "../auth-error";
+import { WorkBudget } from "../work-budget";
 import { authorizeUpload, assertUploadScope } from "./authorization";
 
 export { authorizeUpload } from "./authorization";
@@ -237,7 +238,22 @@ export async function beginUpload(
   );
 }
 
+const artifactWork = new WorkBudget(8);
+
 export async function uploadArtifact(
+  service: AuthService,
+  request: Request,
+  projectId: string,
+  uploadId: string,
+  id: string,
+  store = new SourceMapStore(),
+) {
+  return artifactWork.run(() =>
+    storeArtifact(service, request, projectId, uploadId, id, store),
+  );
+}
+
+async function storeArtifact(
   service: AuthService,
   request: Request,
   projectId: string,

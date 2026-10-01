@@ -6,6 +6,7 @@ import { getRuntime } from "../../../../../server/runtime";
 import { EditProjectForm } from "../../../../../components/projects/EditProjectForm";
 import { DeleteProjectForm } from "../../../../../components/projects/DeleteProjectForm";
 import { SourceMapTokens } from "../../../../../components/projects/SourceMapTokens";
+import { IngestionKeys } from "../../../../../components/projects/IngestionKeys";
 import { SourceMapPolicyForm } from "../../../../../components/projects/SourceMapPolicyForm";
 import { sourceMapSettings } from "../../../../../server/source-maps/policy";
 
@@ -20,6 +21,15 @@ export default async function ProjectSettingsPage({
     where: { id, ...projectScope(member) },
     include: {
       origins: { orderBy: { origin: "asc" } },
+      keys: {
+        where: {
+          revokedAt: null,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        },
+        select: { id: true, createdAt: true, expiresAt: true },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      },
       sourceMapTokens: {
         select: { id: true, name: true, expiresAt: true, revokedAt: true },
         orderBy: [
@@ -62,6 +72,14 @@ export default async function ProjectSettingsPage({
           }}
         />
       </section>
+      <IngestionKeys
+        projectId={id}
+        keys={project.keys.map((key) => ({
+          id: key.id,
+          createdAt: key.createdAt.toISOString(),
+          expiresAt: key.expiresAt?.toISOString() ?? null,
+        }))}
+      />
       {maps ? (
         <SourceMapPolicyForm projectId={id} settings={maps} />
       ) : (

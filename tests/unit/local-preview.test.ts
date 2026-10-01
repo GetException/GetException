@@ -11,71 +11,88 @@ import { join } from "node:path";
 import { childEnvironment, loadState } from "../../scripts/local/state";
 import { randomBytes } from "node:crypto";
 
-it("upgrades the previous local configuration without replacing account keys or saved ports", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "getexception-upgrade-test-"));
-  const secret = () => randomBytes(32).toString("hex");
-  const old = {
-    version: 1,
-    initialized: true,
-    ports: {
-      https: 8443,
-      database: 25432,
-      web: 23000,
-      ingest: 23001,
-      worker: 23002,
-      retention: 23003,
-    },
-    passwords: {
-      postgres: secret(),
-      migrate: secret(),
-      web: secret(),
-      ingest: secret(),
-      worker: secret(),
-      backup: secret(),
-    },
-    secrets: {
-      BETTER_AUTH_SECRET: secret(),
-      TOTP_ENCRYPTION_KEY: secret(),
-      AUTH_RATE_KEY: secret(),
-    },
-  };
+it.each([1, 2])(
+  "upgrades local configuration v%s without replacing account keys or saved ports",
+  async (version) => {
+    const directory = mkdtempSync(join(tmpdir(), "getexception-upgrade-test-"));
+    const secret = () => randomBytes(32).toString("hex");
+    const old = {
+      version,
+      initialized: true,
+      ports: {
+        https: 8443,
+        database: 25432,
+        web: 23000,
+        ingest: 23001,
+        worker: 23002,
+        retention: 23003,
+      },
+      passwords: {
+        postgres: secret(),
+        migrate: secret(),
+        web: secret(),
+        ingest: secret(),
+        worker: secret(),
+        backup: secret(),
+      },
+      secrets: {
+        BETTER_AUTH_SECRET: secret(),
+        TOTP_ENCRYPTION_KEY: secret(),
+        AUTH_RATE_KEY: secret(),
+      },
+    };
 
-  try {
-    mkdirSync(join(directory, "data"));
-    writeFileSync(join(directory, "data", "PG_VERSION"), "17\n");
-    writeFileSync(join(directory, "config.json"), JSON.stringify(old));
-    const upgraded = await loadState(directory);
+    try {
+      mkdirSync(join(directory, "data"));
+      writeFileSync(join(directory, "data", "PG_VERSION"), "17\n");
+      const saved =
+        version === 2
+          ? {
+              ...old,
+              mailInitialized: true,
+              ports: { ...old.ports, mail: 23004, smtp: 23005, mailUi: 23006 },
+              passwords: { ...old.passwords, mail: secret() },
+              secrets: { ...old.secrets, MAIL_ENCRYPTION_KEY: secret() },
+            }
+          : old;
 
-    expect(upgraded.version).toBe(2);
-    expect(upgraded.mailInitialized).toBe(false);
-    expect(
-      Object.entries(old.secrets).every(
-        ([name, value]) =>
-          upgraded.secrets[name as keyof typeof old.secrets] === value,
-      ),
-    ).toBe(true);
-    expect(
-      Object.entries(old.passwords).every(
-        ([name, value]) =>
-          upgraded.passwords[name as keyof typeof old.passwords] === value,
-      ),
-    ).toBe(true);
-    expect(
-      Object.entries(old.ports).every(
-        ([name, value]) =>
-          upgraded.ports[name as keyof typeof old.ports] === value,
-      ),
-    ).toBe(true);
-    const serialized = readFileSync(join(directory, "config.json"), "utf8");
+      writeFileSync(join(directory, "config.json"), JSON.stringify(saved));
+      const upgraded = await loadState(directory);
 
-    await loadState(directory);
-    expect(
-      readFileSync(join(directory, "config.json"), "utf8") === serialized,
-    ).toBe(true);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
+      expect(upgraded.version).toBe(3);
+      expect(upgraded).not.toHaveProperty("mailInitialized");
+      expect(upgraded.ports).not.toHaveProperty("smtp");
+      expect(upgraded.passwords).not.toHaveProperty("mail");
+      expect(upgraded.secrets).not.toHaveProperty("MAIL_ENCRYPTION_KEY");
+      expect(
+        Object.entries(old.secrets).every(
+          ([name, value]) =>
+            upgraded.secrets[name as keyof typeof old.secrets] === value,
+        ),
+      ).toBe(true);
+      expect(
+        Object.entries(old.passwords).every(
+          ([name, value]) =>
+            upgraded.passwords[name as keyof typeof old.passwords] === value,
+        ),
+      ).toBe(true);
+      expect(
+        Object.entries(old.ports).every(
+          ([name, value]) =>
+            upgraded.ports[name as keyof typeof old.ports] === value,
+        ),
+      ).toBe(true);
+      const serialized = readFileSync(join(directory, "config.json"), "utf8");
+
+      await loadState(directory);
+      expect(
+        readFileSync(join(directory, "config.json"), "utf8") === serialized,
+      ).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 it("refuses to generate fresh keys when existing database files have lost their configuration", async () => {
   const directory = mkdtempSync(join(tmpdir(), "getexception-state-test-"));

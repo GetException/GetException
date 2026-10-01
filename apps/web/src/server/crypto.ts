@@ -7,6 +7,10 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import argon2 from "argon2";
+import { WorkBudget } from "./work-budget";
+import passwordDenylist from "./password-denylist.json" with { type: "json" };
+
+const passwordWork = new WorkBudget(4);
 
 export const token = () => randomBytes(32).toString("hex");
 
@@ -177,40 +181,35 @@ export function decryptSecret(
   ]).toString("utf8");
 }
 
-// Small local deny-list; expand from an audited offline breached-password corpus before production.
-const commonPasswords = new Set([
-  "password1234",
-  "password12345",
-  "password123456",
-  "123456789012",
-  "qwerty12345678",
-  "administrator",
-  "letmein123456",
-]);
+// Pinned offline SecLists corpus; provenance and license: apps/web/THIRD-PARTY-NOTICES.md.
+const commonPasswords = new Set(passwordDenylist);
 
 export function passwordAllowed(value: string) {
   return (
     value.length >= 12 &&
     value.length <= 128 &&
-    !commonPasswords.has(value.toLowerCase())
+    !commonPasswords.has(digest(value.toLowerCase()))
   );
 }
 
 export const hashPassword = (password: string) =>
-  argon2.hash(password, {
-    type: argon2.argon2id,
-    memoryCost: 65536,
-    timeCost: 3,
-    parallelism: 1,
-  });
+  passwordWork.run(() =>
+    argon2.hash(password, {
+      type: argon2.argon2id,
+      memoryCost: 65536,
+      timeCost: 3,
+      parallelism: 1,
+    }),
+  );
 
-export const verifyPassword = async (hash: string, password: string) => {
-  try {
-    return await argon2.verify(hash, password);
-  } catch {
-    return false;
-  }
-};
+export const verifyPassword = (hash: string, password: string) =>
+  passwordWork.run(async () => {
+    try {
+      return await argon2.verify(hash, password);
+    } catch {
+      return false;
+    }
+  });
 
 export function recoveryCodes() {
   return Array.from({ length: 10 }, () => randomBytes(16).toString("hex"));

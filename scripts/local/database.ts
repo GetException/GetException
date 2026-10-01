@@ -194,7 +194,6 @@ export async function startLocalDatabase(directory: string, state: LocalState) {
         "ingest",
         "worker",
         "backup",
-        "mail",
       ] as const) {
         const name = `getexception_${role}`;
         const found = await admin.query(
@@ -203,7 +202,7 @@ export async function startLocalDatabase(directory: string, state: LocalState) {
         );
 
         if (!found.rowCount) {
-          if (state.initialized && (role !== "mail" || state.mailInitialized)) {
+          if (state.initialized) {
             throw new LocalError(
               "A saved database role is missing; automatic replacement was refused.",
             );
@@ -223,7 +222,7 @@ export async function startLocalDatabase(directory: string, state: LocalState) {
         "REVOKE ALL ON SCHEMA public FROM PUBLIC; ALTER SCHEMA public OWNER TO getexception_migrate",
       );
       await admin.query(
-        "ALTER ROLE getexception_mail SET statement_timeout = '15s'; ALTER ROLE getexception_mail SET lock_timeout = '3s'; ALTER ROLE getexception_mail SET idle_in_transaction_session_timeout = '15s'",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'getexception_mail') THEN CREATE ROLE getexception_mail NOLOGIN; ELSE ALTER ROLE getexception_mail NOLOGIN; END IF; END $$",
       );
       await admin.query("COMMIT");
     } finally {
@@ -286,7 +285,6 @@ export async function startLocalDatabase(directory: string, state: LocalState) {
     }
 
     state.initialized = true;
-    state.mailInitialized = true;
     saveState(directory, state);
 
     return { stop, installed, child };

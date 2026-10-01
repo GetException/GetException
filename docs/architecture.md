@@ -12,7 +12,7 @@ Setup token: 256 случайных бит, SHA-256 в БД, TTL 24 часа, si
 
 TOTP: 160 случайных бит, шесть цифр, 30 секунд, окно ±1, constant-time comparison. Версия `v1` AES-256-GCM, отдельный 32-байтный ключ в hex, случайный 96-битный nonce, AAD содержит приложение, версию, user ID и `pending`/`active`. Принятый counter монотонно обновляется под `FOR UPDATE` одновременно с сессией или step-up. Один код нельзя использовать для setup, входа и подтверждения повторно. Recovery-код 128-битный, в БД SHA-256, потребление атомарно под тем же credential lock.
 
-Пароли: Argon2id, 64 MiB, time cost 3, parallelism 1; 12–128 символов, небольшой deny-list распространённых паролей. Это не полный breached-password corpus. Auth buckets в PostgreSQL: 10 попыток за 5 минут одновременно по HMAC IP и нормализованного email с типом операции. Реплики используют один `AUTH_RATE_KEY`; исходные identifiers не сохраняются. Очистка накопленных expired auth/setup/session rows требует эксплуатационной задачи перед production.
+Пароли: Argon2id, 64 MiB, time cost 3, parallelism 1; 12–128 символов, локальный denylist из закреплённого SecLists corpus (487 SHA-256 для паролей допустимой длины). Это не полный breached-password corpus. Auth buckets в PostgreSQL: 10 попыток за 5 минут одновременно по HMAC IP и нормализованного email с типом операции. Реплики используют один `AUTH_RATE_KEY`; исходные identifiers не сохраняются. Истёкшие auth/setup/session rows очищает retention через ограниченную SQL-функцию по ADR-0003.
 
 Cookie `__Host-getexception.session`: Secure, HttpOnly, SameSite=Strict, Path=/, без Domain. Session cache/refresh отключены; абсолютный TTL 8 часов, idle TTL 30 минут. В БД есть `mfaVerifiedAt` и `mfaMethod`; опасные операции требуют `totp` и возраст ≤5 минут. Recovery позволяет войти, но не выдать DSN без нового TOTP. `trustDevice` строго равен `false`; Owner email OTP отсутствует. Signup, invitation и все штатные MFA routes Better Auth не опубликованы. Все изменяющие HTTP-запросы проверяют точный Origin и JSON content type. Setup/status/step-up и ответы auth получают `Cache-Control: no-store`.
 
@@ -48,7 +48,7 @@ Worker claims `FOR UPDATE SKIP LOCKED` в короткой транзакции.
 
 Для ingest генерируется отдельный **клиентский projection** `ingest.prisma`: только четыре вставляемые колонки и readonly views. Полный Prisma client добавляет defaults в INSERT и нарушает column-level grants. Источник миграций — только `schema.prisma`; **никогда не запускайте migrate по ingest.prisma**.
 
-`runtime_schema` закрывает readiness при незавершённой/неизвестной версии миграций. При следующей миграции обновите ожидаемую версию и проверку view. Текущая версия readiness — 8, ей соответствуют девять завершённых миграций. Integration создаёт пустой PostgreSQL, применяет все миграции, а отдельно проверяет последовательное обновление предыдущих схем с существующими данными.
+`runtime_schema` закрывает readiness при незавершённой/неизвестной версии миграций. При следующей миграции обновите ожидаемую версию и проверку view. Текущая версия readiness — 10, ей соответствуют одиннадцать завершённых миграций. Integration создаёт пустой PostgreSQL, применяет все миграции, а отдельно проверяет последовательное обновление предыдущих схем с существующими данными.
 
 ## HTTP и контейнеры
 
@@ -66,4 +66,4 @@ Nonce CSP кабинета не разрешает unsafe-inline scripts, соб
 
 ## Роли и приглашения
 
-[Контракт ручных приглашений и переходной почтовой инфраструктуры](mail.md). Owner после свежего password + TOTP step-up получает одноразовую 24-часовую ссылку и передаёт её через доверенный канал. Новый Account, обязательный active TOTP, десять recovery hashes, Member и TeamMember создаются одной транзакцией после первого кода. MFA нельзя отключить через интерфейс или публичный API. Последний активный Owner защищён от отключения и понижения общей блокировкой workspace при параллельных изменениях.
+[Контракт ручных приглашений](mail.md). Owner после свежего password + TOTP step-up получает одноразовую 24-часовую ссылку и передаёт её через доверенный канал. Новый Account, обязательный active TOTP, десять recovery hashes, Member и TeamMember создаются одной транзакцией после первого кода. MFA нельзя отключить через интерфейс или публичный API. Последний активный Owner защищён от отключения и понижения общей блокировкой workspace при параллельных изменениях.

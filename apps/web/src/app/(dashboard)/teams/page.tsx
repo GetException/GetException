@@ -64,7 +64,7 @@ export default async function TeamsPage({
           )
         }
       />
-      <form className="filters standalone-filters" method="get">
+      <form key={q} className="filters standalone-filters" method="get">
         <label className="filter-field search-field">
           Search teams
           <input

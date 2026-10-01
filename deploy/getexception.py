@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import selectors
 import shutil
 import subprocess
 import sys
@@ -24,13 +25,14 @@ import urllib.request
 
 REPOSITORY = "GetException/GetException"
 WORKFLOW = REPOSITORY + "/.github/workflows/release.yml"
-FILES = {"compose.yaml", "Caddyfile", "init-db.sh", "getexception.py", ".env.example", "release.json"}
-SERVICES = ["web", "ingest", "worker-events", "worker-retention", "worker-mail"]
+LEGACY_FILES = {"compose.yaml", "Caddyfile", "init-db.sh", "getexception.py", ".env.example", "release.json"}
+FILES = LEGACY_FILES | {"backup.py", "getexception-backup.service", "getexception-backup.timer"}
+SERVICES = ["web", "ingest", "worker-events", "worker-retention"]
 IMAGE_REPOSITORIES = {"ghcr.io/getexception/getexception-" + name
                       for name in ["web", "ingest", "worker", "mail", "migrate"]}
 SECRET_KEYS = ["POSTGRES_PASSWORD", "MIGRATE_PASSWORD", "WEB_PASSWORD", "INGEST_PASSWORD",
-               "WORKER_PASSWORD", "MAIL_PASSWORD", "BACKUP_PASSWORD", "BETTER_AUTH_SECRET",
-               "TOTP_ENCRYPTION_KEY", "AUTH_RATE_KEY", "MAIL_ENCRYPTION_KEY"]
+               "WORKER_PASSWORD", "BACKUP_PASSWORD", "BETTER_AUTH_SECRET",
+               "TOTP_ENCRYPTION_KEY", "AUTH_RATE_KEY"]
 SHA = re.compile(r"^[a-f0-9]{40}$")
 
 
@@ -38,7 +40,9 @@ class Failure(Exception):
     pass
 
 
-def run(args, *, env=None, stdout=subprocess.PIPE, timeout=600):
+def run(args, *, env=None, stdout=subprocess.PIPE, timeout=600, output_limit=None):
+    if output_limit is not None:
+        return run_limited(args, env=env, output=stdout, limit=output_limit, timeout=timeout)
     try:
         result = subprocess.run(args, check=False, env=env, stdout=stdout,
                                 stderr=subprocess.PIPE, timeout=timeout)
@@ -50,6 +54,40 @@ def run(args, *, env=None, stdout=subprocess.PIPE, timeout=600):
         raise Failure("Command failed: " + args[0] + ". Inspect the service locally.")
 
     return result.stdout.decode().strip() if result.stdout else ""
+
+
+def run_limited(args, *, env, output, limit, timeout):
+    """Stream a dump without buffering it in memory or exhausting the host disk."""
+    try:
+        process = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        raise Failure("Backup command unavailable.") from exc
+    deadline = time.monotonic() + timeout
+    total = 0
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise Failure("Backup command timed out.")
+                chunk = os.read(process.stdout.fileno(), 65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise Failure("Backup exceeds its disk budget.")
+                output.write(chunk)
+        if process.wait(timeout=max(0.1, deadline - time.monotonic())):
+            raise Failure("Database backup command failed.")
+        return ""
+    except subprocess.TimeoutExpired as exc:
+        raise Failure("Backup command timed out.") from exc
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        process.stdout.close()
 
 
 def atomic_write(path, content, mode=0o600):
@@ -124,24 +162,7 @@ def configure(root, options):
     values["ACME_EMAIL"] = os.environ.get("ACME_EMAIL", "")
     if values["ACME_EMAIL"] and not re.fullmatch(r"[a-zA-Z0-9._+%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", values["ACME_EMAIL"]):
         raise Failure("ACME_EMAIL must be empty or a valid contact email.")
-    values["MAIL_ENABLED"] = os.environ.get(
-        "MAIL_ENABLED", "true" if os.environ.get("SMTP_HOST") or os.environ.get("SMTP_FROM") else "false")
-    if values["MAIL_ENABLED"] not in ["true", "false"]:
-        raise Failure("MAIL_ENABLED must be true or false.")
-    for key in ["SMTP_HOST", "SMTP_FROM"]:
-        values[key] = os.environ.get(key, "")
-    for key, default in {"SMTP_PORT": "587", "SMTP_MODE": "starttls", "SMTP_USER": "",
-                         "SMTP_PASSWORD": "", "WORKER_CONCURRENCY": "4"}.items():
-        values[key] = os.environ.get(key, default)
-    if values["MAIL_ENABLED"] == "true":
-        if values["SMTP_MODE"] not in ["tls", "starttls"]:
-            raise Failure("Production SMTP requires tls or starttls.")
-        if not values["SMTP_PORT"].isdigit() or not 0 < int(values["SMTP_PORT"]) < 65536:
-            raise Failure("Invalid SMTP port.")
-        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", values["SMTP_FROM"]):
-            raise Failure("Configure a valid SMTP_FROM to enable email delivery.")
-        if not re.fullmatch(r"[a-zA-Z0-9.-]+", values["SMTP_HOST"]):
-            raise Failure("Configure SMTP_HOST to enable email delivery.")
+    values["WORKER_CONCURRENCY"] = os.environ.get("WORKER_CONCURRENCY", "4")
     if not values["WORKER_CONCURRENCY"].isdigit() or not 1 <= int(values["WORKER_CONCURRENCY"]) <= 16:
         raise Failure("WORKER_CONCURRENCY must be between 1 and 16.")
 
@@ -162,7 +183,7 @@ def metadata(directory, expected=None):
     if not isinstance(value.get("schemaVersion"), int) or not isinstance(value.get("rollbackFromSchemaVersions"), list):
         raise Failure("Missing migration compatibility metadata.")
     images = value.get("images", {})
-    if set(images) != {"web", "ingest", "worker", "mail", "migrate"}:
+    if set(images) not in ({"web", "ingest", "worker", "migrate"}, {"web", "ingest", "worker", "mail", "migrate"}):
         raise Failure("Release is missing runtime images.")
     for name, reference in images.items():
         if not re.fullmatch(r"ghcr\.io/getexception/getexception-" + name + r"@sha256:[a-f0-9]{64}", reference):
@@ -178,7 +199,8 @@ def extract_archive(archive, destination):
         raise Failure("Expanded release archive exceeds the size limit.")
     with tarfile.open(fileobj=io.BytesIO(expanded), mode="r:") as bundle:
         members = bundle.getmembers()
-        if {entry.name for entry in members} != FILES or len(members) != len(FILES):
+        names = {entry.name for entry in members}
+        if names not in (FILES, LEGACY_FILES) or len(members) != len(names):
             raise Failure("Unexpected or duplicate paths in the release archive.")
         if any(not entry.isfile() or entry.size > 2_000_000 or entry.size < 0 for entry in members):
             raise Failure("Links, special files and oversized files are forbidden in releases.")
@@ -238,7 +260,8 @@ def fetch_release(root, sha, archive_url=None, *, attestation_bundle=None, trust
         metadata(unpacked, sha)
         destination = root / "releases" / sha
         if destination.exists():
-            if any((destination / name).read_bytes() != (unpacked / name).read_bytes() for name in FILES):
+            names = {entry.name for entry in unpacked.iterdir()}
+            if {entry.name for entry in destination.iterdir()} != names or any((destination / name).read_bytes() != (unpacked / name).read_bytes() for name in names):
                 raise Failure("An existing immutable release differs from the published artifact.")
         else:
             with tempfile.TemporaryDirectory(dir=root / "releases", prefix=".staging-") as staging:
@@ -270,13 +293,13 @@ class Installation:
             raise Failure("Invalid current release pointer.")
         return target
 
-    def compose(self, release, *args, stdout=subprocess.PIPE):
+    def compose(self, release, *args, stdout=subprocess.PIPE, output_limit=None):
         info = metadata(release)
         image_file = self.runtime / "images.env"
         atomic_write(image_file, env_text({key.upper() + "_IMAGE": value for key, value in info["images"].items()}))
         return run(["docker", "compose", "--project-name", "getexception", "--project-directory", str(release),
                     "--env-file", str(self.runtime / ".env"), "--env-file", str(image_file),
-                    "-f", str(release / "compose.yaml"), *args], env=docker_environment(), stdout=stdout)
+                    "-f", str(release / "compose.yaml"), *args], env=docker_environment(), stdout=stdout, output_limit=output_limit)
 
     def switch(self, release):
         temporary = self.root / ".current-next"
@@ -346,8 +369,11 @@ class Installation:
                     stdout=subprocess.DEVNULL)
         return len(candidates)
 
+    def services(self, release):
+        return SERVICES + (["worker-mail"] if "mail" in metadata(release)["images"] else [])
+
     def ready(self, release, *, defer_ingest_dns=False):
-        self.compose(release, "up", "-d", "--wait", "--wait-timeout", "180", "--no-deps", *SERVICES)
+        self.compose(release, "up", "-d", "--wait", "--wait-timeout", "180", "--no-deps", *self.services(release))
         self.compose(release, "up", "-d", "--wait", "--wait-timeout", "90", "--no-deps", "caddy")
         self.smoke(release, defer_ingest_dns=defer_ingest_dns)
 
@@ -386,7 +412,7 @@ class Installation:
             raise Failure("Configure SMOKE_DSN and SMOKE_ORIGIN for a dedicated deployment probe project.")
         event_id = secrets.token_hex(16)
         payload = {"event_id": event_id, "timestamp": time.time(), "level": "error", "platform": "javascript",
-                   "environment": "production", "release": release.name,
+                   "environment": "production",
                    "exception": {"values": [{"type": "DeploymentProbe", "value": "GetException deployment probe",
                                               "mechanism": {"type": "generic", "handled": True}}]}}
         body = (json.dumps({"event_id": event_id}) + "\n" + json.dumps({"type": "event"}) + "\n" + json.dumps(payload)).encode()
@@ -397,10 +423,13 @@ class Installation:
             if response.status != 200:
                 raise Failure("Deployment event was not accepted.")
         # Only server-generated hex identifiers enter this fixed technical query.
-        query = 'SELECT count(*) FROM error_event WHERE "eventId" = \'' + event_id + "'"
+        query = 'SELECT count(*) FROM error_event WHERE "projectId" = \'' + project + '\' AND "eventId" = \'' + event_id + "'"
         for attempt in range(30):
             count = self.compose(release, "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "getexception", "-Atc", query)
             if count == "1":
+                if metadata(release)["schemaVersion"] >= 10:
+                    cleanup = "SELECT cleanup_deployment_probe('" + project + "', '" + event_id + "')"
+                    self.compose(release, "exec", "-T", "postgres", "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "getexception", "-Atc", cleanup)
                 return
             time.sleep(1)
         raise Failure("The worker did not finish processing the deployment event.")
@@ -418,14 +447,16 @@ class Installation:
             self.smoke(old)
         self.compose(target, "config", "--quiet")
         self.compose(target, "pull")
-        self.compose(target, "up", "-d", "--wait", "--wait-timeout", "120", "postgres")
         self.compose(target, "run", "--rm", "--no-deps", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
         if old:
             self.backup(old)
-        journal = {"previous": old.name if old else None, "target": target.name, "phase": "migration"}
+        journal = {"previous": old.name if old else None, "target": target.name, "phase": "database"}
         write_json(self.pending, journal)
         if old:
-            self.compose(old, "stop", "caddy", *SERVICES)
+            self.compose(old, "stop", "caddy", *self.services(old))
+        self.compose(target, "up", "-d", "--wait", "--wait-timeout", "120", "postgres")
+        journal["phase"] = "migration"
+        write_json(self.pending, journal)
         try:
             self.compose(target, "run", "--rm", "--no-deps", "migrate")
         except Failure as exc:
@@ -439,11 +470,13 @@ class Installation:
         except (Failure, OSError) as exc:
             target_schema = metadata(target)["schemaVersion"]
             if old and target_schema in metadata(old)["rollbackFromSchemaVersions"]:
-                self.compose(target, "stop", "caddy", *SERVICES)
+                self.compose(target, "stop", "caddy", *self.services(target))
                 self.ready(old)
                 self.pending.unlink()
                 raise Failure("New release failed its health check. The previous release was restored.") from exc
             raise Failure("Release failed; automatic rollback is incompatible or unavailable. Follow the recovery guide.") from exc
+        if old and "mail" in metadata(old)["images"] and "mail" not in metadata(target)["images"]:
+            self.compose(old, "rm", "--force", "worker-mail")
         self.switch(target)
         previous = old.name if old else None
         if old == target:
@@ -476,7 +509,7 @@ class Installation:
         if metadata(current)["schemaVersion"] not in metadata(target)["rollbackFromSchemaVersions"]:
             raise Failure("The previous release does not support the current database schema.")
         write_json(self.pending, {"previous": current.name, "target": target.name, "phase": "rollback"})
-        self.compose(current, "stop", "caddy", *SERVICES)
+        self.compose(current, "stop", "caddy", *self.services(current))
         self.ready(target)
         self.switch(target)
         write_json(self.runtime / "state.json", {"current": target.name, "previous": current.name})

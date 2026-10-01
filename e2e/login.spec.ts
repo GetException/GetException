@@ -1,17 +1,8 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { totp } from "../apps/web/src/server/crypto";
 import { startStack } from "./stack";
-
-async function fillOtp(page: Page, code: string) {
-  const cells = page
-    .getByRole("group", { name: "Authenticator code" })
-    .locator("input.otp-cell");
-
-  for (let index = 0; index < code.length; index += 1) {
-    await cells.nth(index).fill(code[index]!);
-  }
-}
+import { fillOtp } from "./otp";
 
 test("login keeps two columns and submits on the sixth authenticator digit", async ({
   browser,
@@ -65,6 +56,9 @@ test("login keeps two columns and submits on the sixth authenticator digit", asy
       page.getByRole("heading", { name: "Overview." }),
     ).toBeVisible();
     await context.close();
+  } catch {
+    // Playwright errors from setup/login can include credentials entered into the form.
+    throw new Error("Login E2E failed; sensitive diagnostics were suppressed.");
   } finally {
     await stack.cleanup();
   }

@@ -15,6 +15,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "deploy"))
 import getexception as installer
+import backup as offsite_backup
 
 spec = importlib.util.spec_from_file_location("bundle", ROOT / "scripts/release/bundle.py")
 bundle = importlib.util.module_from_spec(spec)
@@ -39,6 +40,7 @@ def run_compose(arguments, redactions, *, stdout=subprocess.PIPE):
 
 
 def main():
+    os.environ["PATH"] = str(ROOT / ".artifacts/tools") + os.pathsep + os.environ.get("PATH", "")
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--build", action="store_true")
@@ -59,10 +61,10 @@ def main():
         work = Path(temporary).resolve()
         root = work / "installation"
         images = {}
-        names = ["web", "ingest", "worker", "mail", "migrate"]
+        names = ["web", "ingest", "worker", "migrate"]
         sha = args.published or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        env = {key: value for key, value in os.environ.items() if not key.startswith("SMTP_")}
-        env.update(ACME_EMAIL="", MAIL_ENABLED="false")
+        env = dict(os.environ)
+        env.update(ACME_EMAIL="")
         options = argparse.Namespace(dashboard_host="monitor.example.com", ingest_host="ingest.example.com")
         if args.build:
             if not args.built:
@@ -133,15 +135,18 @@ def main():
         image_env.write_text(installer.env_text({name.upper() + "_IMAGE": reference for name, reference in images.items()}))
 
         class DockerInstallation(installer.Installation):
-            def compose(self, target, *arguments, stdout=subprocess.PIPE):
+            def compose(self, target, *arguments, stdout=subprocess.PIPE, output_limit=None):
                 # Local build tags are available only in this isolated test, never in the production controller.
                 if arguments == ("pull",) and args.build:
                     return ""
                 config = installer.read_env(root / "runtime/.env")
-                redactions = [config.get(key, "") for key in [*installer.SECRET_KEYS, "SETUP_TOKEN_HASH", "SMTP_USER", "SMTP_PASSWORD"]]
-                return run_compose(["docker", "compose", "-p", project, "--env-file", str(root / "runtime/.env"),
+                redactions = [config.get(key, "") for key in [*installer.SECRET_KEYS, "SETUP_TOKEN_HASH"]]
+                command = ["docker", "compose", "-p", project, "--env-file", str(root / "runtime/.env"),
                                     "--env-file", str(image_env), "-f", str(target / "compose.yaml"),
-                                    "-f", str(work / "override.json"), *arguments], redactions, stdout=stdout)
+                                    "-f", str(work / "override.json"), *arguments]
+                if output_limit is not None:
+                    return installer.run_limited(command, env=None, output=stdout, limit=output_limit, timeout=600)
+                return run_compose(command, redactions, stdout=stdout)
 
             def smoke(self, target, *, defer_ingest_dns=False):
                 # This test uses a local CA; production smoke never disables certificate verification.
@@ -163,9 +168,6 @@ def main():
         installation = DockerInstallation(root)
         try:
             installation.deploy(release, first=True)
-            installation.compose(release, "exec", "-T", "worker-mail", "node", "-e",
-                                 "fetch('http://127.0.0.1:3003/health/ready').then(async r=>"
-                                 "process.exit(r.ok && (await r.json()).mailEnabled===false ? 0 : 1))")
             test_env = {**os.environ, "DEPLOYMENT_TEST_DIR": str(root), "DEPLOYMENT_TEST_PROJECT": project}
             run(["corepack", "yarn", "playwright", "test", "--config", "playwright.deployment.config.ts"], env=test_env)
             query = 'SELECT (SELECT count(*) FROM "user"), (SELECT count(*) FROM member), (SELECT count(*) FROM project), (SELECT count(*) FROM error_event)'
@@ -203,11 +205,25 @@ def main():
                                          "postgres", "pg_restore", "--list"], stdin=stream, stdout=subprocess.DEVNULL)
                 if result.returncode:
                     raise RuntimeError("Deployment backup cannot be read by pg_restore")
+            # Exercise real encryption/authentication and config recovery before restoring the database.
+            archive_directory = work / "backup-drill"
+            archive_directory.mkdir(mode=0o700)
+            archive = offsite_backup.make_archive(installation, release, archive_directory)
+            identity = archive_directory / "identity"
+            installer.run([offsite_backup.tool("age-keygen"), "--output", str(identity)], stdout=subprocess.DEVNULL)
+            recipient = installer.run([offsite_backup.tool("age-keygen"), "-y", str(identity)])
+            encrypted = archive_directory / "backup.age"
+            installer.run([offsite_backup.tool("age"), "--encrypt", "--recipient", recipient, "--output", str(encrypted), str(archive)], stdout=subprocess.DEVNULL)
+            unpacked = archive_directory / "restored"
+            offsite_backup.unpack(encrypted, identity, unpacked)
+            if (unpacked / "runtime.env").read_bytes() != (root / "runtime/.env").read_bytes():
+                raise RuntimeError("Encrypted backup did not preserve authentication keys")
+            backup = unpacked / "database.dump"
             installation.compose(release, "exec", "-T", "postgres", "createdb", "-U", "postgres", "getexception_restore_test")
             with backup.open("rb") as stream:
                 restored = subprocess.run(["docker", "compose", "-p", project, "--env-file", str(root / "runtime/.env"),
                                           "--env-file", str(image_env), "-f", str(release / "compose.yaml"), "exec", "-T",
-                                          "postgres", "pg_restore", "-U", "postgres", "--exit-on-error", "--clean", "--if-exists", "-d", "getexception_restore_test"],
+                                          "postgres", "pg_restore", "-U", "postgres", "--exit-on-error", "-d", "getexception_restore_test"],
                                          stdin=stream, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 if restored.returncode:
                     raise RuntimeError("Backup restore into a clean database failed")

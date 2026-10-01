@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
+import { request } from "node:https";
 import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { setTimeout } from "node:timers/promises";
@@ -29,7 +30,7 @@ export async function startStack(gitlabTrust = "") {
 
   if (!existsSync(caddy)) {
     throw new Error(
-      "Set CADDY_BINARY to a verified Caddy 2.10.2 binary; see docs/testing.md",
+      "Set CADDY_BINARY to a verified Caddy 2.11.4 binary; see docs/testing.md",
     );
   }
 
@@ -60,7 +61,6 @@ export async function startStack(gitlabTrust = "") {
     BETTER_AUTH_SECRET: token(),
     TOTP_ENCRYPTION_KEY: token(),
     AUTH_RATE_KEY: token(),
-    MAIL_ENCRYPTION_KEY: token(),
     GITLAB_CI_TRUST: gitlabTrust,
   };
 
@@ -149,6 +149,7 @@ export async function startStack(gitlabTrust = "") {
       {
         env: {
           ...process.env,
+          CADDY_BIND: "127.0.0.1",
           XDG_DATA_HOME: join(database.directory, "caddy-data"),
           XDG_CONFIG_HOME: join(database.directory, "caddy-config"),
           DASHBOARD_HOST: `monitor.localhost:${proxyPort}`,
@@ -165,10 +166,43 @@ export async function startStack(gitlabTrust = "") {
     );
 
     children.push(proxy);
-    await setTimeout(600);
+    let proxyReady = false;
 
-    if (proxy.exitCode !== null) {
-      throw new Error("Caddy test proxy failed");
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (proxy.exitCode !== null || proxy.signalCode !== null) {
+        throw new Error("Caddy test proxy failed before HTTPS readiness");
+      }
+
+      proxyReady = await new Promise<boolean>((resolve) => {
+        const probe = request(
+          {
+            hostname: "127.0.0.1",
+            servername: "monitor.localhost",
+            port: proxyPort,
+            path: "/login",
+            headers: { Host: `monitor.localhost:${proxyPort}` },
+            rejectUnauthorized: false,
+          },
+          (response) => {
+            response.resume();
+            resolve([200, 307].includes(response.statusCode ?? 0));
+          },
+        );
+
+        probe.setTimeout(1000, () => probe.destroy());
+        probe.once("error", () => resolve(false));
+        probe.end();
+      });
+
+      if (proxyReady) {
+        break;
+      }
+
+      await setTimeout(200);
+    }
+
+    if (!proxyReady) {
+      throw new Error("Caddy test proxy did not become HTTPS ready");
     }
 
     return {

@@ -50,7 +50,7 @@ const legacyStateSchema = z
   })
   .strict();
 
-export const stateSchema = legacyStateSchema
+const mailStateSchema = legacyStateSchema
   .extend({
     version: z.literal(2),
     mailInitialized: z.boolean(),
@@ -65,6 +65,8 @@ export const stateSchema = legacyStateSchema
     }),
   })
   .strict();
+
+export const stateSchema = legacyStateSchema.extend({ version: z.literal(3) });
 
 export type LocalState = z.infer<typeof stateSchema>;
 
@@ -115,7 +117,9 @@ export async function loadState(
 
     try {
       const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
-      const legacy = legacyStateSchema.safeParse(raw);
+      const legacy = z
+        .union([legacyStateSchema, mailStateSchema])
+        .safeParse(raw);
 
       if (legacy.success) {
         if (
@@ -127,33 +131,16 @@ export async function loadState(
           );
         }
 
-        const used = new Set(Object.values(legacy.data.ports));
-        const reserve = async (preferred?: number) => {
-          let value = preferred ?? (await availablePort());
-
-          while (used.has(value)) {
-            value = await availablePort();
-          }
-
-          used.add(value);
-
-          return value;
-        };
         const upgraded: LocalState = {
-          ...legacy.data,
-          version: 2,
-          mailInitialized: false,
-          ports: {
-            ...legacy.data.ports,
-            mail: await reserve(),
-            smtp: await reserve(),
-            mailUi: await reserve(8025),
-          },
-          passwords: { ...legacy.data.passwords, mail: freshSecret() },
-          secrets: {
-            ...legacy.data.secrets,
-            MAIL_ENCRYPTION_KEY: freshSecret(),
-          },
+          version: 3,
+          initialized: legacy.data.initialized,
+          ports: legacyStateSchema.shape.ports.strip().parse(legacy.data.ports),
+          passwords: legacyStateSchema.shape.passwords
+            .strip()
+            .parse(legacy.data.passwords),
+          secrets: legacyStateSchema.shape.secrets
+            .strip()
+            .parse(legacy.data.secrets),
         };
 
         saveState(directory, upgraded);
@@ -197,7 +184,7 @@ export async function loadState(
     throw new LocalError("LOCAL_HTTPS_PORT must be between 1024 and 65535.");
   }
 
-  const allocated = new Set([httpsPort, 8025]);
+  const allocated = new Set([httpsPort]);
 
   async function nextPort() {
     let value: number;
@@ -212,9 +199,8 @@ export async function loadState(
   }
 
   const state: LocalState = {
-    version: 2,
+    version: 3,
     initialized: false,
-    mailInitialized: false,
     ports: {
       https: httpsPort,
       database: await nextPort(),
@@ -222,9 +208,6 @@ export async function loadState(
       ingest: await nextPort(),
       worker: await nextPort(),
       retention: await nextPort(),
-      mail: await nextPort(),
-      smtp: await nextPort(),
-      mailUi: httpsPort === 8025 ? await nextPort() : 8025,
     },
     passwords: {
       postgres: freshSecret(),
@@ -233,13 +216,11 @@ export async function loadState(
       ingest: freshSecret(),
       worker: freshSecret(),
       backup: freshSecret(),
-      mail: freshSecret(),
     },
     secrets: {
       BETTER_AUTH_SECRET: freshSecret(),
       TOTP_ENCRYPTION_KEY: freshSecret(),
       AUTH_RATE_KEY: freshSecret(),
-      MAIL_ENCRYPTION_KEY: freshSecret(),
     },
   };
 
@@ -271,7 +252,6 @@ export function localOrigins(state: LocalState) {
     ingest: `https://ingest.monitor${suffix}`,
     browser: `https://browser.monitor${suffix}`,
     react: `https://react.monitor${suffix}`,
-    mail: `http://127.0.0.1:${state.ports.mailUi}`,
   };
 }
 

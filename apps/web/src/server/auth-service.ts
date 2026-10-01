@@ -40,6 +40,8 @@ export class AuthService {
       | "project_update"
       | "project_delete"
       | "project_restore"
+      | "ingestion_key_rotate"
+      | "ingestion_key_revoke"
       | "issue_resolve"
       | "issue_reopen"
       | "team_create"

@@ -100,7 +100,7 @@ export default async function IssuesPage({
           ))}
           <span className="muted result-count">{number(total)} issues</span>
         </div>
-        <form className="filters" method="get">
+        <form key={JSON.stringify(filters)} className="filters" method="get">
           <input type="hidden" name="status" value={filters.status} />
           {filters.release && (
             <input type="hidden" name="release" value={filters.release} />
@@ -185,7 +185,6 @@ export default async function IssuesPage({
                 <tr>
                   <th>Issue</th>
                   <th>Project</th>
-                  <th>Latest retained event</th>
                   <th>Status</th>
                   <th
                     className="numeric"
@@ -207,18 +206,33 @@ export default async function IssuesPage({
                   return (
                     <tr key={issue.id}>
                       <td>
-                        <Link
-                          className="issue-title"
-                          href={linkTo(`/issues/${issue.id}`, {
-                            event: latest?.eventId,
-                          })}
-                        >
-                          <span className="issue-icon">!</span>
-                          <span>
-                            <strong>{issue.exceptionType}</strong>
-                            <small title={issue.title}>{issue.title}</small>
-                          </span>
-                        </Link>
+                        <div className="issue-cell">
+                          <Link
+                            className="issue-title"
+                            href={linkTo(`/issues/${issue.id}`, {
+                              event: latest?.eventId,
+                            })}
+                          >
+                            <span className="issue-icon">!</span>
+                            <span>
+                              <strong>{issue.exceptionType}</strong>
+                              <small title={issue.title}>{issue.title}</small>
+                            </span>
+                          </Link>
+                          {latest ? (
+                            <IssueBuildContext
+                              projectId={issue.projectId}
+                              environment={latest.environment}
+                              releaseName={latest.release}
+                              release={release}
+                              symbolicationState={latest.symbolicationState}
+                            />
+                          ) : (
+                            <span className="muted issue-no-event">
+                              No retained event
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td>
                         <Link
@@ -227,19 +241,6 @@ export default async function IssuesPage({
                         >
                           {issue.project.name}
                         </Link>
-                      </td>
-                      <td>
-                        {latest ? (
-                          <IssueBuildContext
-                            projectId={issue.projectId}
-                            environment={latest.environment}
-                            releaseName={latest.release}
-                            release={release}
-                            symbolicationState={latest.symbolicationState}
-                          />
-                        ) : (
-                          <span className="muted">No retained event</span>
-                        )}
                       </td>
                       <td>
                         <Status

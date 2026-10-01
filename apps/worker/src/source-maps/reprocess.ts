@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Database, Prisma } from "@getexception/db";
-import { safeEventSchema } from "@getexception/protocol";
+import { originalFrameSchema, safeEventSchema } from "@getexception/protocol";
 import { SourceMapStore } from "@getexception/source-maps";
 import { fingerprint } from "../fingerprint";
 import { resolveFrames } from "./resolve";
@@ -36,7 +36,18 @@ export async function reprocessOneEvent(
     tags: event.tags,
     breadcrumbs: event.breadcrumbs,
   });
-  const result = await resolveFrames(db, event.projectId, safe, store);
+  const previousFrames = originalFrameSchema
+    .nullable()
+    .array()
+    .max(100)
+    .parse(event.originalFrames);
+  const result = await resolveFrames(
+    db,
+    event.projectId,
+    safe,
+    store,
+    previousFrames,
+  );
   const hash = fingerprint(result.event);
 
   await db.$transaction(async (tx) => {

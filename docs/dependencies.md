@@ -4,8 +4,8 @@
 
 | Зависимость                                                                         | Зачем нужна                                                                                                                                                       |
 | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Node 24.20.0 / Yarn 4.17.1                                                          | Единый runtime/toolchain, workspaces и обычный node_modules.                                                                                                      |
-| Next.js 16.3.4, React/React DOM 19.2.8                                              | App Router, серверный rendering и интерактивные auth/project формы.                                                                                               |
+| Node 24.21.0 / Yarn 4.17.1                                                          | Единый runtime/toolchain, workspaces и обычный node_modules.                                                                                                      |
+| Next.js 16.3.6, React/React DOM 19.2.8                                              | App Router, серверный rendering и интерактивные auth/project формы.                                                                                               |
 | Base UI 1.8.0                                                                       | Доступные Input/Field/Button primitives без собственной реализации управления фокусом и label.                                                                    |
 | qrcode.react 4.2.0                                                                  | Локальное SVG-представление TOTP URI в браузере; секрет не передаётся внешнему QR-сервису.                                                                        |
 | Tailwind/PostCSS 4.3.3                                                              | Стили и семантические CSS variables, без внешнего CDN.                                                                                                            |
@@ -20,13 +20,13 @@
 | Vitest 5.0.0                                                                        | Unit и интеграционные тесты с настоящим PostgreSQL.                                                                                                               |
 | embedded-postgres 17.9.0-beta.16                                                    | Только dev/test: локальный изолированный PostgreSQL без установки Docker. Platform binary закреплён lockfile. Production использует официальный PostgreSQL image. |
 | Playwright 1.63.0                                                                   | Полный browser scenario через HTTPS, проверка cookies, SDK и dashboard.                                                                                           |
-| Caddy 2.10.2                                                                        | Разные HTTPS hosts, локальная CA, маршрутизация и HTTP границы. Stock Caddy не заменяет распределённый rate limiter.                                              |
+| Caddy 2.11.4                                                                        | Разные HTTPS hosts, локальная CA, маршрутизация и HTTP границы. Stock Caddy не заменяет распределённый rate limiter.                                              |
 
 API интеграции проверялся по исходникам фактически установленных версий, в частности Better Auth adapter context, cookie creation, twoFactor storage и Prisma PostgreSQL adapter. Интеграционные тесты фиксируют предположения, которые нельзя заменить одной ссылкой на документацию: атомарность сессии/MFA, UTC timestamps и отказ column-level grants у полного ingest client.
 
-Обновление Better Auth, Prisma или Sentry требует повторить integration, alias и HTTPS E2E. Перед production отдельно проверить advisories, доступность/происхождение pinned images, обновить поддерживаемые patch versions и закрепить digests. Публикация SDK и передача NPM_TOKEN этой итерацией не выполняются.
+Обновление Better Auth, Prisma или Sentry требует повторить integration, alias и HTTPS E2E. Перед production отдельно проверить advisories, доступность/происхождение pinned images, обновить поддерживаемые patch versions и закрепить digests. Публикация трёх пакетов SDK/CLI выполняется release workflow; NPM_TOKEN доступен только шагу публикации.
 
-Почта, Mailpit и обновление локальной конфигурации: [mail.md](mail.md).
+Ручные приглашения и удаление legacy SMTP: [mail.md](mail.md).
 
 ## Инструменты release checks
 

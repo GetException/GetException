@@ -103,6 +103,8 @@ export async function safeRoute(fn: () => Promise<Response>) {
           : 503;
 
     const reasons: Record<string, string> = {
+      ingestion_key_limit:
+        "Too many active DSNs. Revoke an unused key or replace all previous keys immediately.",
       source_map_disk_full:
         "Source map upload would use the disk reserve. Free server space before retrying.",
       source_map_storage_unavailable:

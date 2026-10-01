@@ -23,6 +23,33 @@
       "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     ]
   },
+  "age": {
+    "repository": "FiloSottile/age",
+    "version": "1.3.2",
+    "archive": "age-v{version}-{platform}-{arch}.tar.gz",
+    "members": { "age": "age/age", "age-keygen": "age/age-keygen" },
+    "darwin": [
+      "amd64",
+      "1d1e4bc66e1427edad7739ae7616157de0e79db8b6d2a1497d7d9925fb06a539"
+    ],
+    "linux": [
+      "amd64",
+      "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
+    ]
+  },
+  "caddy": {
+    "repository": "caddyserver/caddy",
+    "version": "2.11.4",
+    "platforms": { "darwin": "mac" },
+    "darwin": [
+      "amd64",
+      "34bc9e5cceee8d67844ef51da624f5b79e8d070f27236e050c3f0066a2dba534"
+    ],
+    "linux": [
+      "amd64",
+      "527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9"
+    ]
+  },
   "grype": {
     "repository": "anchore/grype",
     "version": "0.118.0",

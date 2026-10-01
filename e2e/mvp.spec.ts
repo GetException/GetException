@@ -5,6 +5,7 @@ import { unlink } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
 import { totp } from "../apps/web/src/server/crypto";
 import { startStack } from "./stack";
+import { fillOtp } from "./otp";
 import { gitlabFixture, ciProject, ciFork } from "../tests/helpers/gitlab-ci";
 
 let stack: Awaited<ReturnType<typeof startStack>>;
@@ -43,22 +44,19 @@ test("protected setup → SDK capture → workspace navigation → investigation
     expect(prepared.headers()["cache-control"]).toBe("no-store");
     const secret = (await prepared.json()).secret as string;
 
-    await page
-      .getByLabel("Authenticator code")
-      .fill(totp(secret, BigInt(Math.floor(Date.now() / 30_000)) - 1n));
-    await page.getByRole("button", { name: "Activate installation" }).click();
+    await fillOtp(
+      page,
+      totp(secret, BigInt(Math.floor(Date.now() / 30_000)) - 1n),
+    );
     await page.getByRole("link", { name: /I saved my codes/ }).click();
     phase = "login";
     await page.getByLabel("Email", { exact: true }).fill(email);
     await page.getByLabel("Password", { exact: true }).fill(password);
-    await page
-      .getByLabel("Authenticator code")
-      .fill(totp(secret, BigInt(Math.floor(Date.now() / 30_000))));
     const loginResponse = page.waitForResponse((response) =>
       response.url().endsWith("/api/auth/login"),
     );
 
-    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await fillOtp(page, totp(secret, BigInt(Math.floor(Date.now() / 30_000))));
     expect((await loginResponse).headers()["cache-control"]).toBe("no-store");
     phase = "login redirect";
     await expect(
@@ -364,6 +362,12 @@ test("protected setup → SDK capture → workspace navigation → investigation
         dashboard.getByRole("heading", { name: "No issues match this view" }),
       ).toBeVisible();
       await dashboard.getByRole("link", { name: "Clear all filters" }).click();
+      await expect(
+        dashboard.getByLabel("Environment", { exact: true }),
+      ).toHaveValue("all");
+      await expect(
+        dashboard.getByText("Browser fixture error", { exact: true }),
+      ).toBeVisible();
       await dashboard.screenshot({
         path: info.outputPath("issues-desktop.png"),
         fullPage: true,
@@ -406,15 +410,15 @@ test("protected setup → SDK capture → workspace navigation → investigation
         .getByRole("link", { name: "Next event →", exact: true })
         .click();
       await expect(dashboard).not.toHaveURL(previousEventUrl);
-      await dashboard
-        .getByRole("button", { name: "Application frames", exact: true })
-        .click();
       await expect(
         dashboard.getByRole("button", {
-          name: "Application frames",
+          name: "Mapped frames",
           exact: true,
         }),
-      ).toHaveAttribute("aria-pressed", "true");
+      ).toBeDisabled();
+      await expect(
+        dashboard.getByText("Source map unavailable", { exact: true }),
+      ).toBeVisible();
       await dashboard.screenshot({
         path: info.outputPath("issue-desktop.png"),
         fullPage: true,
@@ -682,6 +686,7 @@ test("protected setup → SDK capture → workspace navigation → investigation
         ? (error.message.match(/net::ERR_[A-Z_]+/)?.[0] ?? error.name)
         : "unknown";
 
+    // eslint-disable-next-line preserve-caught-error -- The original Playwright error can expose setup tokens and TOTP values.
     throw new Error(
       `MVP E2E failed during ${phase} (${category}). Sensitive diagnostics were suppressed.`,
     );

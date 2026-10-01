@@ -24,7 +24,7 @@
 	# With multiple wildcards, each * matches one path segment. File PUTs need both IDs.
 	@source_upload path /api/v1/projects/*/source-maps /api/v1/projects/*/source-maps/* /api/v1/projects/*/source-maps/*/*
 	request_body @source_upload {
-		max_size 16777216
+		max_size 16842752
 	}
 	@dashboard_request not path /api/v1/projects/*/source-maps /api/v1/projects/*/source-maps/* /api/v1/projects/*/source-maps/*/*
 	request_body @dashboard_request {

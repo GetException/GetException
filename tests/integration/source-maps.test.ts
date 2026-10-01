@@ -55,8 +55,6 @@ beforeAll(async () => {
       BETTER_AUTH_SECRET: token(),
       TOTP_ENCRYPTION_KEY: token(),
       AUTH_RATE_KEY: token(),
-      MAIL_ENCRYPTION_KEY: token(),
-      MAIL_ENABLED: false,
     },
     web,
   ).service;
@@ -755,6 +753,24 @@ it("keeps maps for recent events, then expires them after 60 days once the inbox
     (await web.errorEvent.findUniqueOrThrow({ where: { id: event.id } }))
       .originalFrames,
   ).toMatchObject([{ filename: "src/original.ts" }]);
+
+  // A later upload version can trigger another pass after the old files expire.
+  await instance.admin.release.update({
+    where: { projectId_name: { projectId, name: release } },
+    data: { sourceMapsVersion: { increment: 1 } },
+  });
+
+  while (await reprocessOneEvent(worker, store)) {
+    /* drain the bounded test fixture */
+  }
+
+  const reprocessed = await web.errorEvent.findUniqueOrThrow({
+    where: { id: event.id },
+  });
+
+  expect(reprocessed.originalFrames).toEqual(event.originalFrames);
+  expect(reprocessed.issueId).toBe(event.issueId);
+  expect(reprocessed.symbolicationState).toBe("complete");
 });
 
 it("accepts a month's 18 account-sized builds without exhausting the project quota", async () => {

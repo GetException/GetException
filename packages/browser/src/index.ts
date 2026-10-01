@@ -2,6 +2,7 @@ import * as Sentry from "@getexception/sentry-browser";
 import { version } from "../package.json";
 import { browserContext } from "./browser-context";
 import { scriptDebugId } from "./debug-ids";
+import { retryAfterMs } from "./retry-after";
 import {
   encodeEnvelope,
   sanitizeBreadcrumb,
@@ -47,7 +48,7 @@ let active = false;
 const pending = new Set<Promise<unknown>>();
 const controllers = new Set<AbortController>();
 const maxTimeout = (timeout?: number) =>
-  Math.min(2000, Math.max(0, timeout ?? 1500));
+  Math.min(2000, Math.max(0, Number.isFinite(timeout) ? timeout! : 1500));
 let backoffUntil = 0;
 
 export function dsnEndpoint(dsn: string): string {
@@ -169,16 +170,11 @@ export function init(options?: BrowserOptions): void {
             })
               .then((response) => {
                 if (response.status === 429) {
-                  backoffUntil =
+                  backoffUntil = Math.max(
+                    backoffUntil,
                     Date.now() +
-                    Math.min(
-                      300_000,
-                      Math.max(
-                        1000,
-                        Number(response.headers.get("retry-after") ?? 60) *
-                          1000,
-                      ),
-                    );
+                      retryAfterMs(response.headers.get("retry-after")),
+                  );
                 }
 
                 return { statusCode: response.status };

@@ -19,8 +19,6 @@ it("serves invitation pages with working per-request script nonces and rejects u
     INGEST_ORIGIN: "https://ingest.monitor.localhost",
     BETTER_AUTH_SECRET: secret(),
     TOTP_ENCRYPTION_KEY: secret(),
-    MAIL_ENCRYPTION_KEY: secret(),
-    MAIL_ENABLED: "false",
     AUTH_RATE_KEY: secret(),
     SOURCE_MAP_DIR: join(database.directory, "maps"),
   });

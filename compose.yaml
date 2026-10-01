@@ -22,7 +22,7 @@ x-health: &health
   start_period: 30s
 services:
   postgres:
-    image: postgres:17.6-bookworm
+    image: postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
     restart: unless-stopped
     environment:
       POSTGRES_DB: getexception
@@ -33,7 +33,6 @@ services:
       WEB_PASSWORD: ${WEB_PASSWORD:?Run yarn local:env}
       INGEST_PASSWORD: ${INGEST_PASSWORD:?Run yarn local:env}
       WORKER_PASSWORD: ${WORKER_PASSWORD:?Run yarn local:env}
-      MAIL_PASSWORD: ${MAIL_PASSWORD:?Run yarn local:env}
       BACKUP_PASSWORD: ${BACKUP_PASSWORD:?Run yarn local:env}
     volumes:
       [
@@ -72,7 +71,6 @@ services:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Run yarn local:env}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Run yarn local:env}
       AUTH_RATE_KEY: ${AUTH_RATE_KEY:?Run yarn local:env}
-      MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run yarn local:env}
     networks: [dashboard, database]
     healthcheck:
       <<: *health
@@ -141,47 +139,14 @@ services:
           -e,
           "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
-  worker-mail:
-    <<: *runtime
-    build: { context: ., dockerfile: docker/Dockerfile, target: mail }
-    image: getexception-mail:${IMAGE_TAG:-local}
-    environment:
-      DATABASE_URL: postgresql://getexception_mail:${MAIL_PASSWORD}@postgres:5432/getexception
-      MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run yarn local:env}
-      SMTP_HOST: ${SMTP_HOST:-mailpit}
-      SMTP_PORT: ${SMTP_PORT:-1025}
-      SMTP_MODE: ${SMTP_MODE:-local}
-      SMTP_FROM: ${SMTP_FROM:-getexception@example.test}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-    networks: [database, mail]
-    healthcheck:
-      <<: *health
-      test:
-        [
-          CMD,
-          node,
-          -e,
-          "fetch('http://127.0.0.1:3003/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
-  mailpit:
-    image: axllent/mailpit:v1.31.1
-    restart: unless-stopped
-    ports: ["127.0.0.1:8025:8025"]
-    environment:
-      MP_DATABASE: /data/mailpit.db
-      MP_DISABLE_VERSION_CHECK: "true"
-      MP_SMTP_DISABLE_RDNS: "true"
-      MP_ALLOWED_HOSTS: localhost,127.0.0.1
-      MP_MAX_MESSAGES: "500"
-    volumes: [mailpit-data:/data]
-    networks: [mail]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    mem_limit: 128m
   caddy:
-    image: caddy:2.10.2-alpine
+    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=32m,mode=1777"]
     ports: ["127.0.0.1:443:443"]
     environment:
       DASHBOARD_HOST: ${DASHBOARD_HOST:-monitor.localhost}
@@ -207,10 +172,8 @@ networks:
   dashboard: { internal: true }
   ingestion: { internal: true }
   database: { internal: true }
-  mail: { internal: true }
 volumes:
   source-maps:
   postgres-data: {}
   caddy-data: {}
   caddy-config: {}
-  mailpit-data: {}

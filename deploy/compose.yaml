@@ -22,7 +22,7 @@ x-health: &health
   start_period: 30s
 services:
   postgres:
-    image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+    image: postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
     restart: unless-stopped
     environment:
       POSTGRES_DB: getexception
@@ -33,7 +33,6 @@ services:
       WEB_PASSWORD: ${WEB_PASSWORD:?Run the production installer}
       INGEST_PASSWORD: ${INGEST_PASSWORD:?Run the production installer}
       WORKER_PASSWORD: ${WORKER_PASSWORD:?Run the production installer}
-      MAIL_PASSWORD: ${MAIL_PASSWORD:?Run the production installer}
       BACKUP_PASSWORD: ${BACKUP_PASSWORD:?Run the production installer}
     volumes:
       [
@@ -71,8 +70,6 @@ services:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Run the production installer}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Run the production installer}
       AUTH_RATE_KEY: ${AUTH_RATE_KEY:?Run the production installer}
-      MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run the production installer}
-      MAIL_ENABLED: ${MAIL_ENABLED:-true}
     networks: [dashboard, database]
     healthcheck:
       <<: *health
@@ -138,32 +135,14 @@ services:
           -e,
           "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
-  worker-mail:
-    <<: *runtime
-    image: ${MAIL_IMAGE:?Use a verified release}
-    environment:
-      DATABASE_URL: postgresql://getexception_mail:${MAIL_PASSWORD}@postgres:5432/getexception
-      MAIL_ENCRYPTION_KEY: ${MAIL_ENCRYPTION_KEY:?Run the production installer}
-      MAIL_ENABLED: ${MAIL_ENABLED:-true}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_MODE: ${SMTP_MODE:-starttls}
-      SMTP_FROM: ${SMTP_FROM:-}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-    networks: [database, mail]
-    healthcheck:
-      <<: *health
-      test:
-        [
-          CMD,
-          node,
-          -e,
-          "fetch('http://127.0.0.1:3003/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
   caddy:
-    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=32m,mode=1777"]
     ports: ["80:80", "443:443"]
     environment:
       ACME_EMAIL: ${ACME_EMAIL:-}
@@ -188,7 +167,6 @@ networks:
   dashboard: { internal: true }
   ingestion: { internal: true }
   database: { internal: true }
-  mail: {}
 volumes:
   source-maps:
   postgres-data: {}

@@ -19,6 +19,8 @@ import { POST as CREATE_MAP_TOKEN } from "../../apps/web/src/app/api/dashboard/p
 import { DELETE as REVOKE_MAP_TOKEN } from "../../apps/web/src/app/api/dashboard/projects/[id]/source-map-tokens/[tokenId]/route";
 import { PATCH as SAVE_MAP_POLICY } from "../../apps/web/src/app/api/dashboard/projects/[id]/source-map-policy/route";
 import { POST as CI_CONTEXT } from "../../apps/web/src/app/api/v1/projects/[id]/ci/route";
+import { POST as ROTATE_DSN } from "../../apps/web/src/app/api/dashboard/projects/[id]/ingestion-keys/route";
+import { DELETE as REVOKE_DSN } from "../../apps/web/src/app/api/dashboard/projects/[id]/ingestion-keys/[keyId]/route";
 import { sourceMapSettings } from "../../apps/web/src/server/source-maps/policy";
 import { gitlabFixture, ciFork, ciForkClaims } from "../helpers/gitlab-ci";
 
@@ -46,8 +48,6 @@ beforeAll(async () => {
       BETTER_AUTH_SECRET: token(),
       TOTP_ENCRYPTION_KEY: token(),
       AUTH_RATE_KEY: token(),
-      MAIL_ENCRYPTION_KEY: token(),
-      MAIL_ENABLED: false,
     },
     web,
   );
@@ -453,6 +453,148 @@ it("creates a hashed, revocable source-map credential only with Owner MFA", asyn
       data: { mfaVerifiedAt: verified.mfaVerifiedAt },
     });
   }
+});
+
+it("rotates hashed DSNs with bounded overlap, immediate revocation, Owner MFA and CSRF", async () => {
+  const { id, dsn } = await (
+    await create(["https://rotation.example.test"])
+  ).json();
+  const request = (body: unknown, extra = {}) =>
+    new Request(
+      `${dashboardOrigin}/api/dashboard/projects/${id}/ingestion-keys`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: dashboardOrigin,
+          "Content-Type": "application/json",
+          ...extra,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+  const rotate = (
+    body: unknown = { revokeImmediately: false },
+    extra = {},
+    projectId = id,
+  ) =>
+    ROTATE_DSN(request(body, extra), {
+      params: Promise.resolve({ id: projectId }),
+    });
+  const member = await web.member.findFirstOrThrow({
+    where: { role: "owner" },
+  });
+  const session = await database.admin.session.findFirstOrThrow();
+  const configCount = (secret: string) =>
+    ingest.ingestionConfig.count({
+      where: { projectId: id, keyHash: digest(secret) },
+    });
+
+  expect((await rotate({}, { Cookie: "" })).status).toBe(400);
+  expect(
+    (await rotate({ revokeImmediately: false }, { Cookie: "" })).status,
+  ).toBe(401);
+  expect(
+    (
+      await rotate(
+        { revokeImmediately: false },
+        { Origin: "https://evil.test" },
+      )
+    ).status,
+  ).toBe(403);
+  expect((await rotate({}, {}, randomUUID())).status).toBe(400);
+  expect(
+    (await rotate({ revokeImmediately: false }, {}, randomUUID())).status,
+  ).toBe(404);
+
+  try {
+    for (const role of ["developer", "viewer"]) {
+      await database.admin.member.update({
+        where: { id: member.id },
+        data: { role },
+      });
+      expect((await rotate()).status).toBe(403);
+    }
+
+    await database.admin.member.update({
+      where: { id: member.id },
+      data: { role: "owner" },
+    });
+    await database.admin.session.updateMany({
+      data: { mfaVerifiedAt: new Date(Date.now() - 301_000) },
+    });
+    expect((await rotate()).status).toBe(428);
+  } finally {
+    await database.admin.member.update({
+      where: { id: member.id },
+      data: { role: "owner" },
+    });
+    await database.admin.session.updateMany({
+      data: { mfaVerifiedAt: session.mfaVerifiedAt },
+    });
+  }
+
+  const response = await rotate();
+
+  expect(response.status).toBe(201);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const replacement = await response.json();
+  const oldKey = await web.projectIngestionKey.findUniqueOrThrow({
+    where: { keyHash: digest(new URL(dsn).username) },
+  });
+
+  expect(oldKey.expiresAt!.getTime() - Date.now()).toBeGreaterThan(86_300_000);
+  expect(await configCount(new URL(dsn).username)).toBe(1);
+  expect(await configCount(new URL(replacement.dsn).username)).toBe(1);
+  expect(
+    JSON.stringify(
+      await web.projectIngestionKey.findMany({ where: { projectId: id } }),
+    ),
+  ).not.toContain(new URL(replacement.dsn).username);
+  await rotate();
+  expect(
+    (
+      await web.projectIngestionKey.findUniqueOrThrow({
+        where: { id: oldKey.id },
+      })
+    ).expiresAt,
+  ).toEqual(oldKey.expiresAt);
+  const immediate = await (await rotate({ revokeImmediately: true })).json();
+
+  expect(await configCount(new URL(dsn).username)).toBe(0);
+  expect(await configCount(new URL(replacement.dsn).username)).toBe(0);
+  expect(await configCount(new URL(immediate.dsn).username)).toBe(1);
+
+  const revoke = (projectId: string) =>
+    REVOKE_DSN(
+      new Request(
+        `${dashboardOrigin}/api/dashboard/projects/${projectId}/ingestion-keys/${immediate.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Cookie: cookie,
+            Origin: dashboardOrigin,
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        },
+      ),
+      { params: Promise.resolve({ id: projectId, keyId: immediate.id }) },
+    );
+
+  expect((await revoke(randomUUID())).status).toBe(404);
+  expect((await revoke(id)).status).toBe(200);
+  expect(await configCount(new URL(immediate.dsn).username)).toBe(0);
+  expect(
+    await web.auditLog.count({
+      where: { action: "ingestion_key_rotate", actorId: member.userId },
+    }),
+  ).toBe(3);
+  expect(
+    await web.auditLog.count({
+      where: { action: "ingestion_key_revoke", actorId: member.userId },
+    }),
+  ).toBe(1);
 });
 
 it("saves preview permissions only for an Owner with CSRF and fresh MFA, and returns explicit CI decisions", async () => {

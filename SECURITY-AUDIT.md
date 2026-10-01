@@ -1,5 +1,7 @@
 # Аудит безопасности GetException
 
+Фактическое состояние реализации, выполненные проверки и открытые блокеры на 1 октября 2026 зафиксированы в [production readiness](docs/production-readiness.md). Прикладные исправления не означают готовность production: остаются уязвимости инфраструктурных образов, offsite backup и проверки выпуска/среды.
+
 Дата проверки архитектуры: 5 сентября 2026 года. Раздел identity и приглашений обновлён 26 сентября 2026 года по ADR-0002.
 
 Этот документ проверяет архитектуру, описанную в [ADR-0001](./0001-sentry-compatible-error-monitoring-platform.md), до начала реализации. Это аудит проектного решения, а не проверка готового кода и не penetration test. После появления приложения нужен повторный аудит исходного кода, Docker-конфигурации и production-сервера.
@@ -142,7 +144,7 @@ prisma.$queryRaw`SELECT ... WHERE project_id = ${projectId}`;
 | `getexception_migrate` | Применять проверенные миграции во время deploy                                                                         | Использоваться постоянно приложениями                                             |
 | `getexception_ingest`  | Читать ограниченное представление активных project/key/origin/quota; вставлять только допустимые колонки `event_inbox` | Читать inbox, события, source maps, аккаунты, сессии; UPDATE/DELETE; менять схему |
 | `getexception_worker`  | Забирать inbox, писать issue/error_event/stat, читать метаданные source maps                                           | Читать password/auth/session/invitation/recovery tables; менять схему             |
-| `getexception_mail`    | Забирать и обновлять mail outbox                                                                                       | Читать password, TOTP, recovery codes и error events; менять схему                |
+| `getexception_mail`    | Legacy-роль без доступа к public schema                                                                                | Читать password, TOTP, recovery codes и error events; менять схему                |
 | `getexception_web`     | Работать с кабинетом, auth и проектами через серверные правила                                                         | Менять схему; становиться superuser; подключаться извне Docker network            |
 | `getexception_backup`  | Только согласованный `pg_dump`                                                                                         | Менять данные и схему                                                             |
 
@@ -357,7 +359,7 @@ Anonymous preview возвращает только название workspace, 
 
 ### Хранение и проверка TOTP
 
-TOTP обязателен для Owner, Developer и Viewer. Установка с `MAIL_ENABLED=false` поддерживает весь auth и invitation flow; SMTP не является фактором или recovery-механизмом. Существующему участнику без MFA правильный пароль создаёт только 15-минутную enrollment session. Database hook разрешает ей открыть лишь MFA enrollment API, а обычная `authenticate` закрывает dashboard до первого правильного кода.
+TOTP обязателен для Owner, Developer и Viewer. SMTP runtime удалён; почта не является фактором или recovery-механизмом. Существующему участнику без MFA правильный пароль создаёт только 15-минутную enrollment session. Database hook разрешает ей открыть лишь MFA enrollment API, а обычная `authenticate` закрывает dashboard до первого правильного кода.
 
 Сервер хранит TOTP как versioned AES-256-GCM ciphertext с отдельным production key. В authenticated additional data входят user ID и состояние `pending` или `active`. Ingest, worker-events и worker-retention не получают ключ. Production web не запускается при отсутствии или неверной длине ключа, а backup секретов обязан включать этот ключ.
 
@@ -422,11 +424,12 @@ Dashboard и ingest должны иметь разные origins и разные
 
 - только Caddy публикует 80/443;
 - PostgreSQL слушает только закрытую Docker network и не имеет `ports:`;
-- web, ingest, worker-events, worker-mail и worker-retention находятся в отдельных network segments настолько, насколько позволяет Compose;
-- каждый контейнер non-root, `read_only`, с `cap_drop: [ALL]`, `no-new-privileges` и отдельным tmpfs;
+- web, ingest, worker-events и worker-retention находятся в отдельных network segments настолько, насколько позволяет Compose;
+- приложения web/ingest/workers работают non-root, `read_only`, с `cap_drop: [ALL]`, `no-new-privileges` и отдельным tmpfs;
+- Caddy имеет read-only root filesystem, `no-new-privileges` и только `NET_BIND_SERVICE`; стандартный образ сохраняет root UID для существующих собственных volumes. PostgreSQL использует штатный entrypoint с переходом к postgres UID. Эти исключения требуют проверки при обновлении базовых образов;
 - Docker socket, host root, SSH keys и каталоги других приложений не монтируются;
 - source-map volume доступен только Worker и upload-компоненту, не ingest;
-- worker-mail получает только SMTP credentials, а ingest, worker-events и worker-retention их не получают;
+- SMTP secrets не передаются ни одному актуальному runtime; legacy mail-role лишена SQL-доступа;
 - TOTP encryption key получает только web;
 - образы запускаются по digest/SHA, сканируются и регулярно пересобираются с security patches;
 - секреты не находятся в image layers, Git, CI output или клиентских env.
@@ -613,7 +616,7 @@ Audit log защищает от обычного изменения через �
 
 Upload принимает только HTTPS + project-scoped Bearer token; cookies/DSN недостаточно, Origin запрещён. Token хранится хешем, показывается Owner один раз после MFA step-up, отзывается и истекает через 90 дней. Файлы ограничены manifest quota, checksum, JSON-only transport, UUID storage paths и O_NOFOLLOW. Комплект становится ready лишь после проверки worker’ом всех файлов. Parser — ограниченный по памяти/времени worker thread без env родителя, не выполняет код и не обращается к remote sources. Родительский worker в production не имеет internet egress.
 
-Фрагменты исходников доступны только через существующую проверку прав на проект и отображаются текстом. Полные карты не скачиваются через API, ingest/Caddy/mail не имеют mount. CI upload token доступен только доверенному коду CI; публичный DSN не заменяет его. Автоматический PostgreSQL backup не включает volume карт: требуется отдельный приватный backup или retry сохранённых CI artifacts.
+Фрагменты исходников доступны только через существующую проверку прав на проект и отображаются текстом. Полные карты не скачиваются через API, ingest/Caddy не имеют mount. CI upload token доступен только доверенному коду CI; публичный DSN не заменяет его. Автоматический PostgreSQL backup не включает volume карт: требуется отдельный приватный backup либо доверенная пересборка того же commit; карты в CI artifacts не сохраняются.
 
 API reason ограничен enum, API code — техническим форматом; это не разрешение на PII в code. Клиентские browser family/major считаются недоверенными диагностическими данными. Полный User-Agent, тела ответов, заголовки и произвольные contexts по-прежнему не сохраняются.
 
@@ -627,7 +630,7 @@ API reason ограничен enum, API code — техническим форм
 
 ## Owner policy и форки (2026-09-18)
 
-Список preview-источников и переключатель хранятся в отдельной таблице с доступом web; ingest, mail и worker не могут читать/изменять разрешения. Изменение защищено Owner + fresh MFA + CSRF, строгой схемой, лимитом 20 ID/path и audit log. Нет wildcard или изменения production refs через UI. Настройка привязана к issuer/основному репозиторию/release prefix; ротация публичного ключа не сбрасывает её, замена основной привязки сбрасывает эффективное доверие.
+Список preview-источников и переключатель хранятся в отдельной таблице с доступом web; ingest и worker не могут читать/изменять разрешения. Изменение защищено Owner + fresh MFA + CSRF, строгой схемой, лимитом 20 ID/path и audit log. Нет wildcard или изменения production refs через UI. Настройка привязана к issuer/основному репозиторию/release prefix; ротация публичного ключа не сбрасывает её, замена основной привязки сбрасывает эффективное доверие.
 
 Дополнительные источники разрешены только для MR preview. Подписанные source и execution projects проверяются отдельно: job может исполняться в разрешённом источнике либо основном репозитории. В fork MR при явном подписанном execution project основного репозитория принимаются оба null CI config либо формат GitLab 19.3.2: точная ссылка на `.gitlab-ci.yml` основного проекта с подписанным source ref и совпадающим SHA. Ссылка на основной проект при выполнении в форке, неполная execution-пара, чужой host/path/ref/SHA, частичные null и внешний config отвергаются. Оба формата сохраняют allowlist источников, переключатель preview и изоляцию job; проверки покрыты подписанными негативными тестами и интеграцией upload → worker → исходный кадр. GitLab подпись не доказывает target MR или review: Owner доверяет сборкам источника целиком. Администраторы этого GitLab, авторы CI кода разрешённого форка и runner остаются границей доверия; временный токен не делает вредоносную сборку безопасной.
 
@@ -640,3 +643,15 @@ Account обязан подтвердить совместимость с v2 д�
 Отказ авторизации остаётся отказом API, но не блокирует обычный deploy account. Управляющий скрипт различает policy skip и ошибку мониторинга, не предоставляет себе разрешения и не подставляет постоянный token. MR получает одну нейтральную строку, production — заметное предупреждение; лог содержит только allowlisted code, HTTP status и серверный UUID request ID. JWT, claims, headers, response bodies и exception messages не допускаются. Серверная корреляция использует собственный случайный UUID, не входящий request header.
 
 При недоступном контексте карты не генерируются. При неуспешном prepare требуется чистая пересборка без карт; после успешного prepare и неуспешного upload публиковать можно только проверенный публичный output. Проверка output и очистка приватных job-каталогов сохраняются во всех ветвях. Нет общего catch/allow_failure для app build или deploy. Приложение разворачивается до upload; context/register и каждый последующий batch имеют отдельные конечные timeout. Gzip ограничивается одновременно по входному и распакованному размеру, поэтому сжатие не создаёт decompression bomb. Повторы используют тот же manifest и не ослабляют CI identity. Подробный порядок принятия ошибки без ослабления доступа: [GitLab CI](docs/gitlab-ci.md).
+
+## Исправления по production-аудиту 1 октября 2026
+
+- Owner получил ротацию и отзыв DSN с fresh TOTP, CSRF, hashes-only storage, audit и overlap не более 24 часов без продления при следующей ротации.
+- Общий проектный бюджет ingest 20/s, burst 50 перенесён также в PostgreSQL; перезапуск/вторая реплика не удваивают его. В памяти остаются ранние ограничения IP/проекта и aggregate 100/s, burst 200. Переполненный IP-cache очищается не чаще одного раза в минуту.
+- Узкая SQL-функция считает отказы известных действующих DSN по проектным лимитам/квотам. Отказы до проверки DSN/Origin не приписываются проекту; при недоступной БД ответ 429 сохраняется, но counter нельзя гарантировать. Полные edge access logs с query/DSN не включаются ради счётчика.
+- Argon2 ограничен четырьмя, загрузка артефактов восемью одновременными операциями на web-процесс. Очередь сверх лимита не накапливается. Пароли сверяются с закреплённым offline-списком 487 SHA-256 из SecLists/прежнего denylist; это не полный breached-password corpus.
+- Повторная symbolication сохраняет восстановленный контекст при отсутствии старых карт. SDK сохраняет ограниченный backoff даже при неверном Retry-After.
+- SMTP runtime/dependencies удалены; SQL-роль лишена прав. Для обновлений сохраняются исторические миграции и чтение прежних release metadata.
+- Подготовлены шифрованный внешний backup, отдельный writer credential, условная запись без перезаписи и offline integrity checks. Реального bucket пока нет; подключение, retention, мониторинг и первое внешнее восстановление обязательны до production. См. [backups.md](docs/backups.md).
+
+Проверка репозитория не заменяет проверку конкретного host, provider encryption, GitHub permissions и внешней резервной копии. Фактические результаты запуска проверок фиксируются в отчёте аудита.

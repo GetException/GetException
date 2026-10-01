@@ -54,7 +54,11 @@ export default async function AuditLogPage({
         description="A history of sign-ins, identity checks, and workspace changes."
       />
       <section className="panel">
-        <form className="filters" method="get">
+        <form
+          key={JSON.stringify([action, outcome])}
+          className="filters"
+          method="get"
+        >
           <label className="filter-field">
             Action
             <select

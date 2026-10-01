@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ChildProcess } from "node:child_process";
 import { startLocalDatabase } from "./database";
-import { startMailpit } from "./mail";
 import {
   databaseUrl,
   LocalError,
@@ -46,7 +45,6 @@ export async function startLocalStack(directory: string, state: LocalState) {
     "apps/web/dist/start.js",
     "apps/ingest/dist/main.js",
     "apps/worker/dist/main.js",
-    "apps/worker/dist/mail.js",
     "fixtures/browser-spa/dist/index.html",
     "fixtures/react-spa/dist/index.html",
   ]) {
@@ -73,7 +71,6 @@ export async function startLocalStack(directory: string, state: LocalState) {
   const origins = localOrigins(state);
 
   try {
-    children.push(await startMailpit(directory, state));
     const base = { BIND_HOST: "127.0.0.1" };
     const web = launch(process.execPath, ["apps/web/dist/start.js"], {
       ...base,
@@ -104,24 +101,11 @@ export async function startLocalStack(directory: string, state: LocalState) {
     });
 
     children.push(web, ingest, worker, retention);
-    const mail = launch(process.execPath, ["apps/worker/dist/mail.js"], {
-      ...base,
-      DATABASE_URL: databaseUrl(state, "mail"),
-      MAIL_ENCRYPTION_KEY: state.secrets.MAIL_ENCRYPTION_KEY,
-      SMTP_HOST: "127.0.0.1",
-      SMTP_PORT: String(state.ports.smtp),
-      SMTP_MODE: "local",
-      SMTP_FROM: "getexception@example.test",
-      PORT: String(state.ports.mail),
-    });
-
-    children.push(mail);
     await Promise.all([
       ready(web, state.ports.web, "Web"),
       ready(ingest, state.ports.ingest, "Ingest"),
       ready(worker, state.ports.worker, "Worker"),
       ready(retention, state.ports.retention, "Retention"),
-      ready(mail, state.ports.mail, "Mail worker"),
     ]);
     const proxy = launch(
       caddy,

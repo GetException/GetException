@@ -68,8 +68,21 @@ describe("MFA cryptographic boundary", () => {
     expect(() => workerConcurrency("17")).toThrow();
     expect(workerConcurrency("4")).toBe(4);
     expect(passwordAllowed("password123456")).toBe(false);
+    expect(passwordAllowed("PASSWORD123456")).toBe(false);
     expect(passwordAllowed("x".repeat(129))).toBe(false);
     expect(passwordAllowed("three words and a lamp")).toBe(true);
+    const key = randomBytes(32).toString("hex");
+
+    expect(() =>
+      webConfig({
+        DATABASE_URL: "postgresql://localhost/test",
+        DASHBOARD_ORIGIN: "https://monitor.example.test",
+        INGEST_ORIGIN: "https://ingest.example.test",
+        BETTER_AUTH_SECRET: key,
+        AUTH_RATE_KEY: key,
+        TOTP_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
+      }),
+    ).toThrow("separate");
     expect(canonicalOrigin("https://app.example.com")).toBe(
       "https://app.example.com",
     );

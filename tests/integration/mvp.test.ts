@@ -65,8 +65,6 @@ beforeAll(async () => {
     INGEST_ORIGIN: "https://ingest.monitor.localhost",
     TOTP_ENCRYPTION_KEY: encryptionKey,
     AUTH_RATE_KEY: token(),
-    MAIL_ENCRYPTION_KEY: token(),
-    MAIL_ENABLED: true,
     BETTER_AUTH_SECRET: token(),
   });
 });
@@ -583,6 +581,13 @@ describe("durable inbox and separate SQL roles", () => {
           })
         ).status,
       ).toBe(429);
+      expect(
+        (
+          await web.projectDailyStat.findFirstOrThrow({
+            where: { projectId: p.id },
+          })
+        ).rejected,
+      ).toBe(1);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -643,6 +648,131 @@ describe("durable inbox and separate SQL roles", () => {
     });
     expect(await runOne(worker)).toBe(false);
     expect(await instance.admin.errorEvent.count()).toBe(9);
+  });
+  it("shares the project admission budget across connections and only counts attributable rejections", async () => {
+    const { project: p, key } = await project();
+    const accepted = await insert(p.id);
+    const replica = createIngestDatabase(instance.urls.ingest);
+
+    try {
+      await instance.admin
+        .$executeRaw`UPDATE project_admission_bucket SET credit = 0, at = clock_timestamp() + interval '1 minute' WHERE "projectId" = ${p.id}`;
+
+      for (const connection of [ingest, replica]) {
+        const eventId = randomUUID().replaceAll("-", "");
+
+        await expect(
+          connection.eventInbox.createMany({
+            data: {
+              id: randomUUID(),
+              projectId: p.id,
+              eventId,
+              payload: sanitizeEvent({ message: "capacity" }, eventId),
+            },
+          }),
+        ).rejects.toThrow();
+        await expect(
+          connection.eventInbox.createMany({
+            data: {
+              id: randomUUID(),
+              projectId: p.id,
+              eventId: accepted.eventId,
+              payload: accepted,
+            },
+          }),
+        ).resolves.toEqual({ count: 0 });
+      }
+
+      await expect(
+        replica.$queryRaw`SELECT * FROM project_admission_bucket`,
+      ).rejects.toThrow();
+      await expect(
+        web.$executeRaw`SELECT record_ingest_rejection(${p.id}, ${digest(key)})`,
+      ).rejects.toThrow();
+      await replica.$executeRaw`SELECT record_ingest_rejection(${p.id}, ${digest("wrong")})`;
+      expect(
+        (
+          await web.projectDailyStat.findFirstOrThrow({
+            where: { projectId: p.id },
+          })
+        ).rejected,
+      ).toBe(0);
+      await replica.$executeRaw`SELECT record_ingest_rejection(${p.id}, ${digest(key)})`;
+      expect(
+        (
+          await web.projectDailyStat.findFirstOrThrow({
+            where: { projectId: p.id },
+          })
+        ).rejected,
+      ).toBe(1);
+      await instance.admin
+        .$executeRaw`UPDATE project_admission_bucket SET at = clock_timestamp() - interval '1 minute' WHERE "projectId" = ${p.id}`;
+      await expect(insert(p.id)).resolves.toBeDefined();
+    } finally {
+      await replica.$disconnect();
+    }
+  });
+  it("removes only the exact completed deployment probe and preserves user events and counters", async () => {
+    const { project: p } = await project();
+    const userEvent = await insert(p.id);
+    const eventId = randomUUID().replaceAll("-", "");
+    const payload = sanitizeEvent(
+      {
+        exception: {
+          values: [
+            { type: "DeploymentProbe", value: "GetException deployment probe" },
+          ],
+        },
+      },
+      eventId,
+    );
+
+    await ingest.eventInbox.createMany({
+      data: { id: randomUUID(), projectId: p.id, eventId, payload },
+    });
+
+    while (await runOne(worker)) {
+      /* drain the isolated fixture */
+    }
+
+    await expect(
+      web.$queryRaw`SELECT cleanup_deployment_probe(${p.id}, ${eventId})`,
+    ).rejects.toThrow();
+    await expect(
+      worker.$queryRaw`SELECT cleanup_deployment_probe(${p.id}, ${eventId})`,
+    ).rejects.toThrow();
+    expect(
+      await instance.admin
+        .$queryRaw`SELECT cleanup_deployment_probe(${p.id}, ${userEvent.eventId}) AS cleaned`,
+    ).toEqual([{ cleaned: false }]);
+    expect(
+      await instance.admin
+        .$queryRaw`SELECT cleanup_deployment_probe(${randomUUID()}, ${eventId}) AS cleaned`,
+    ).toEqual([{ cleaned: false }]);
+    expect(
+      await instance.admin
+        .$queryRaw`SELECT cleanup_deployment_probe(${p.id}, ${eventId}) AS cleaned`,
+    ).toEqual([{ cleaned: true }]);
+    expect(
+      await instance.admin
+        .$queryRaw`SELECT cleanup_deployment_probe(${p.id}, ${eventId}) AS cleaned`,
+    ).toEqual([{ cleaned: false }]);
+    expect(await web.errorEvent.count({ where: { projectId: p.id } })).toBe(1);
+    expect(
+      await instance.admin.eventInbox.count({ where: { projectId: p.id } }),
+    ).toBe(1);
+    expect(await web.issue.count({ where: { projectId: p.id } })).toBe(1);
+    expect(
+      (await web.issue.findFirstOrThrow({ where: { projectId: p.id } }))
+        .eventCount,
+    ).toBe(1);
+    expect(
+      (
+        await web.projectDailyStat.findFirstOrThrow({
+          where: { projectId: p.id },
+        })
+      ).accepted,
+    ).toBe(1);
   });
   it("retries poisoned records with bounded backoff and dead letters", async () => {
     const { project: p } = await project();
@@ -723,6 +853,7 @@ describe("durable inbox and separate SQL roles", () => {
         sourceMapPolicy,
         manualInvitations,
         monitoringRetention,
+        productionAdmission,
       ] = migrationFiles();
 
       await upgrade.query(initial!);
@@ -933,6 +1064,31 @@ describe("durable inbox and separate SQL roles", () => {
         (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
           ?.version,
       ).toBe(9);
+      await upgrade.query(productionAdmission!);
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rowCount,
+      ).toBe(0);
+      await upgrade.query(
+        "INSERT INTO _prisma_migrations(finished_at) VALUES (now())",
+      );
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
+          ?.version,
+      ).toBe(10);
+      expect(
+        (
+          await upgrade.query(
+            "SELECT has_schema_privilege('getexception_mail', 'public', 'USAGE') AS allowed",
+          )
+        ).rows[0]?.allowed,
+      ).toBe(false);
+      expect(
+        (
+          await upgrade.query(
+            "SELECT has_function_privilege('getexception_ingest', 'record_ingest_rejection(text,text)', 'EXECUTE') AS allowed",
+          )
+        ).rows[0]?.allowed,
+      ).toBe(true);
       expect(
         (
           await upgrade.query(

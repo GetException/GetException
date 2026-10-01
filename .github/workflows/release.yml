@@ -86,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [web, ingest, worker, mail, migrate]
+        target: [web, ingest, worker, migrate]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -123,11 +123,11 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
       - run: python3 scripts/release/install-tools.py grype
-      - name: Reject critical runtime image vulnerabilities
+      - name: Reject high and critical runtime image vulnerabilities
         env:
           IMAGE: ghcr.io/getexception/getexception-${{ matrix.target }}@${{ steps.existing.outputs.digest || steps.image.outputs.digest }}
           TARGET: ${{ matrix.target }}
-        run: .artifacts/tools/grype "registry:$IMAGE" --fail-on critical --output json --file ".artifacts/grype-$TARGET.json"
+        run: .artifacts/tools/grype "registry:$IMAGE" --fail-on high --output json --file ".artifacts/grype-$TARGET.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ always() }}
         with:
@@ -152,8 +152,26 @@ jobs:
           name: image-${{ matrix.target }}
           path: image-*.json
           retention-days: 7
+  scan-infrastructure:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release/install-tools.py grype
+      - run: python3 scripts/release/scan-infrastructure.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ always() }}
+        with:
+          name: vulnerabilities-infrastructure
+          path: .artifacts/grype-*.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
   publish-bootstrap:
-    needs: build-images
+    needs: [build-images, scan-infrastructure]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -222,6 +240,7 @@ jobs:
         with:
           name: registry-fixtures
           path: .artifacts/registry
+      - run: python3 scripts/release/install-tools.py age
       - name: Test the published installer, setup, event ingestion and persistent data
         env:
           GH_TOKEN: ${{ github.token }}

@@ -76,7 +76,13 @@ describe("automatic SDK and server release", () => {
       ]),
     );
     expect(JSON.stringify(config.jobs["build-images"])).toContain(
-      "--fail-on critical",
+      "--fail-on high",
+    );
+    expect(config.jobs["publish-bootstrap"].needs).toEqual(
+      expect.arrayContaining(["build-images", "scan-infrastructure"]),
+    );
+    expect(JSON.stringify(config.jobs["scan-infrastructure"])).toContain(
+      "python3 scripts/release/scan-infrastructure.py",
     );
     expect(JSON.stringify(config.jobs["bootstrap-e2e"])).toContain(
       "--published",
