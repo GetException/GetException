@@ -45,3 +45,20 @@ COPY --from=build --chown=node:node /app/packages/db/prisma /app/packages/db/pri
 COPY --from=build --chown=node:node /app/apps/migrate/dist /app/apps/migrate/dist
 USER node
 CMD ["node", "apps/migrate/dist/main.js"]
+
+# Upstream's signed release is available before its official Docker image.
+# Keep only the static binary and CA roots; no shell, apk or system zlib at runtime.
+FROM base AS caddy-binary
+ADD --checksum=sha256:22c84f8d2d4e4e0e2d422f8049fdd0fc1ed8d5665d0fe166f506c7fd863b4555 https://github.com/caddyserver/caddy/releases/download/v2.11.6/caddy_2.11.6_linux_amd64.tar.gz /tmp/caddy.tar.gz
+RUN mkdir -p /caddy/data /caddy/config && tar -xzf /tmp/caddy.tar.gz -C /caddy caddy LICENSE
+
+FROM scratch AS caddy
+ENV PATH=/usr/bin XDG_CONFIG_HOME=/config XDG_DATA_HOME=/data
+COPY --from=caddy-binary /caddy/caddy /usr/bin/caddy
+COPY --from=caddy-binary /caddy/LICENSE /usr/share/licenses/caddy/LICENSE
+COPY --from=caddy-binary /caddy/data /data
+COPY --from=caddy-binary /caddy/config /config
+COPY --from=caddy-binary /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+WORKDIR /srv
+EXPOSE 80 443
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

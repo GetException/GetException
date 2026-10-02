@@ -162,6 +162,68 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(installation.pending.exists())
         self.assertFalse(any(args[0] in ["up", "stop"] for _, args in installation.calls))
 
+    def test_database_runtime_change_restores_final_dump_before_migrations(self):
+        installation, old = self.active()
+        target = self.release(schema=10, compatible=[10])
+        info = installer.metadata(target)
+        info["databaseRuntime"] = installer.DATABASE_CURRENT
+        installer.write_json(target / "release.json", info)
+        dump = self.root / "runtime/test.dump"
+        dump.write_bytes(b"test")
+
+        def backup(release):
+            installation.calls.append((release.name, ("backup",)))
+            return dump
+
+        def restore(release, path, counts):
+            self.assertEqual((release, path, counts), (target, dump, "user|2\nproject|1"))
+            self.assertEqual(json.loads(installation.pending.read_text())["phase"], "database-restore")
+            installation.calls.append((release.name, ("restore",)))
+
+        with patch.object(installation, "database_preflight", return_value=True), \
+             patch.object(installation, "database_counts", return_value="user|2\nproject|1"), \
+             patch.object(installation, "backup", side_effect=backup), \
+             patch.object(installation, "restore_database", side_effect=restore):
+            installation.deploy(target)
+        operations = [args for _, args in installation.calls]
+        backups = [i for i, args in enumerate(operations) if args == ("backup",)]
+        stopped = next(i for i, args in enumerate(operations) if args[0] == "stop")
+        restored = operations.index(("restore",))
+        self.assertLess(backups[0], stopped)
+        self.assertLess(stopped, backups[1])
+        self.assertLess(backups[1], restored)
+        self.assertLess(restored, operations.index(("run", "--rm", "--no-deps", "migrate")))
+        with self.assertRaisesRegex(installer.Failure, "Database runtime changed"):
+            installation.rollback()
+
+    def test_failed_database_restore_keeps_old_pointer_and_blocks_restart(self):
+        installation, old = self.active()
+        target = self.release()
+        with patch.object(installation, "database_preflight", return_value=True), \
+             patch.object(installation, "database_counts", return_value="user|2"), \
+             patch.object(installation, "restore_database", side_effect=installer.Failure("restore failed")):
+            with self.assertRaisesRegex(installer.Failure, "restore failed"):
+                installation.deploy(target)
+        self.assertEqual(installation.current(), old)
+        self.assertEqual(json.loads(installation.pending.read_text())["phase"], "database-restore")
+        self.assertNotIn((target.name, ("ready",)), installation.calls)
+        with self.assertRaisesRegex(installer.Failure, "unfinished"):
+            installation.deploy(target)
+
+    def test_database_preflight_rejects_existing_target_volume_before_downtime(self):
+        installation, old = self.active()
+        target = self.release()
+        info = installer.metadata(target)
+        info["databaseRuntime"] = installer.DATABASE_CURRENT
+        installer.write_json(target / "release.json", info)
+        config = {"services": {"postgres": {"volumes": [{"source": "postgres-data-alpine-v1", "target": "/var/lib/postgresql/data"}]}},
+                  "volumes": {"postgres-data-alpine-v1": {"name": "test_postgres-data-alpine-v1"}}}
+        with patch.object(installation, "compose", return_value=json.dumps(config)), \
+             patch.object(installer, "run", return_value="test_postgres-data-alpine-v1"):
+            with self.assertRaisesRegex(installer.Failure, "already exists"):
+                installation.database_preflight(old, target)
+        self.assertFalse(installation.pending.exists())
+
     def test_health_failure_restores_previous_release_and_reports_failure(self):
         installation, old = self.active()
         target = self.release()

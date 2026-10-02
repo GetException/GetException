@@ -29,22 +29,25 @@ LEGACY_FILES = {"compose.yaml", "Caddyfile", "init-db.sh", "getexception.py", ".
 FILES = LEGACY_FILES | {"backup.py", "getexception-backup.service", "getexception-backup.timer"}
 SERVICES = ["web", "ingest", "worker-events", "worker-retention"]
 IMAGE_REPOSITORIES = {"ghcr.io/getexception/getexception-" + name
-                      for name in ["web", "ingest", "worker", "mail", "migrate"]}
+                      for name in ["web", "ingest", "worker", "mail", "migrate", "caddy"]}
 SECRET_KEYS = ["POSTGRES_PASSWORD", "MIGRATE_PASSWORD", "WEB_PASSWORD", "INGEST_PASSWORD",
                "WORKER_PASSWORD", "BACKUP_PASSWORD", "BETTER_AUTH_SECRET",
                "TOTP_ENCRYPTION_KEY", "AUTH_RATE_KEY"]
 SHA = re.compile(r"^[a-f0-9]{40}$")
+DATABASE_LEGACY = "postgres17-bookworm-v1"
+DATABASE_CURRENT = "postgres17-alpine-v1"
+BACKUP_LIMIT = 5 * 1024**3
 
 
 class Failure(Exception):
     pass
 
 
-def run(args, *, env=None, stdout=subprocess.PIPE, timeout=600, output_limit=None):
+def run(args, *, env=None, stdout=subprocess.PIPE, timeout=600, output_limit=None, stdin=None):
     if output_limit is not None:
         return run_limited(args, env=env, output=stdout, limit=output_limit, timeout=timeout)
     try:
-        result = subprocess.run(args, check=False, env=env, stdout=stdout,
+        result = subprocess.run(args, check=False, env=env, stdout=stdout, stdin=stdin,
                                 stderr=subprocess.PIPE, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Failure("Command unavailable or timed out: " + args[0]) from exc
@@ -183,8 +186,11 @@ def metadata(directory, expected=None):
     if not isinstance(value.get("schemaVersion"), int) or not isinstance(value.get("rollbackFromSchemaVersions"), list):
         raise Failure("Missing migration compatibility metadata.")
     images = value.get("images", {})
-    if set(images) not in ({"web", "ingest", "worker", "migrate"}, {"web", "ingest", "worker", "mail", "migrate"}):
+    if set(images) not in ({"web", "ingest", "worker", "migrate"}, {"web", "ingest", "worker", "mail", "migrate"},
+                          {"web", "ingest", "worker", "migrate", "caddy"}):
         raise Failure("Release is missing runtime images.")
+    if value.get("databaseRuntime", "postgres17-bookworm-v1") not in {"postgres17-bookworm-v1", "postgres17-alpine-v1"}:
+        raise Failure("Unsupported PostgreSQL runtime.")
     for name, reference in images.items():
         if not re.fullmatch(r"ghcr\.io/getexception/getexception-" + name + r"@sha256:[a-f0-9]{64}", reference):
             raise Failure("Release images must use the expected GHCR repository and digest.")
@@ -293,13 +299,13 @@ class Installation:
             raise Failure("Invalid current release pointer.")
         return target
 
-    def compose(self, release, *args, stdout=subprocess.PIPE, output_limit=None):
+    def compose(self, release, *args, stdout=subprocess.PIPE, output_limit=None, stdin=None):
         info = metadata(release)
         image_file = self.runtime / "images.env"
         atomic_write(image_file, env_text({key.upper() + "_IMAGE": value for key, value in info["images"].items()}))
         return run(["docker", "compose", "--project-name", "getexception", "--project-directory", str(release),
                     "--env-file", str(self.runtime / ".env"), "--env-file", str(image_file),
-                    "-f", str(release / "compose.yaml"), *args], env=docker_environment(), stdout=stdout, output_limit=output_limit)
+                    "-f", str(release / "compose.yaml"), *args], env=docker_environment(), stdout=stdout, output_limit=output_limit, stdin=stdin)
 
     def switch(self, release):
         temporary = self.root / ".current-next"
@@ -310,14 +316,66 @@ class Installation:
     def backup(self, release):
         directory = self.runtime / "backups"
         directory.mkdir(mode=0o700, exist_ok=True)
+        if shutil.disk_usage(directory).free < BACKUP_LIMIT + 5 * 1024**3:
+            raise Failure("Database backup requires its 5 GiB budget plus 5 GiB of free reserve.")
         target = directory / (time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(4) + ".dump")
         with target.open("xb") as stream:
             self.compose(release, "exec", "-T", "postgres", "sh", "-c",
                          'PGPASSWORD="$BACKUP_PASSWORD" exec pg_dump -h 127.0.0.1 -U getexception_backup -d getexception -Fc',
-                         stdout=stream)
+                         stdout=stream, output_limit=BACKUP_LIMIT)
         if target.stat().st_size == 0:
             raise Failure("Database backup is empty.")
         return target
+
+    def database_runtime(self, release):
+        return metadata(release).get("databaseRuntime", DATABASE_LEGACY)
+
+    def database_preflight(self, old, target):
+        """Never attach an existing glibc cluster to a musl PostgreSQL process."""
+        if not old or self.database_runtime(old) == self.database_runtime(target):
+            return False
+        if (self.database_runtime(old), self.database_runtime(target)) != (DATABASE_LEGACY, DATABASE_CURRENT):
+            raise Failure("Unsupported database runtime transition; restore requires an operator.")
+        config = json.loads(self.compose(target, "config", "--format", "json"))
+        mount = [v for v in config["services"]["postgres"]["volumes"]
+                 if v.get("target") == "/var/lib/postgresql/data"]
+        if len(mount) != 1 or mount[0].get("source") != "postgres-data-alpine-v1":
+            raise Failure("Database transition requires a separate named volume.")
+        volume = config["volumes"]["postgres-data-alpine-v1"]["name"]
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]+", volume):
+            raise Failure("Invalid database volume name.")
+        existing = run(["docker", "volume", "ls", "--format", "{{.Name}}"], env=docker_environment()).splitlines()
+        if volume in existing:
+            raise Failure("Target database volume already exists; inspect the previous migration before retrying.")
+        docker_root = run(["docker", "info", "--format", "{{.DockerRootDir}}"], env=docker_environment())
+        size = int(self.database_sql(old, "SELECT pg_database_size(current_database())"))
+        if shutil.disk_usage(docker_root).free < max(2 * size, BACKUP_LIMIT) + 5 * 1024**3:
+            raise Failure("Not enough space to preserve the old database and restore into a new volume.")
+        unsupported = self.database_sql(old, """SELECT
+          (SELECT count(*) FROM pg_collation c JOIN pg_namespace n ON n.oid = c.collnamespace
+            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')) +
+          (SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql')""")
+        if unsupported != "0":
+            raise Failure("Custom PostgreSQL extensions/collations require a reviewed migration.")
+        return True
+
+    def database_sql(self, release, sql):
+        return self.compose(release, "exec", "-T", "postgres", "psql", "-v", "ON_ERROR_STOP=1",
+                            "-U", "postgres", "-d", "getexception", "-Atc", sql)
+
+    def database_counts(self, release):
+        tables = self.database_sql(release, "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename").splitlines()
+        if not tables or any(not re.fullmatch(r"[a-z_][a-z0-9_]*", table) for table in tables):
+            raise Failure("Unexpected database tables; refusing automatic runtime migration.")
+        query = " UNION ALL ".join(f"SELECT '{table}', count(*) FROM public.\"{table}\"" for table in tables)
+        return self.database_sql(release, query)
+
+    def restore_database(self, target, dump, expected_counts):
+        with dump.open("rb") as stream:
+            self.compose(target, "exec", "-T", "postgres", "pg_restore", "--exit-on-error", "--single-transaction", "--clean", "--if-exists",
+                         "-U", "postgres", "-d", "getexception", stdin=stream)
+        if self.database_counts(target) != expected_counts:
+            raise Failure("Restored table counts differ; services remain stopped and the old volume is preserved.")
 
     def prune_images(self, *, dry_run=False):
         if self.pending.exists():
@@ -448,13 +506,25 @@ class Installation:
         self.compose(target, "config", "--quiet")
         self.compose(target, "pull")
         self.compose(target, "run", "--rm", "--no-deps", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
+        change_database = self.database_preflight(old, target)
         if old:
             self.backup(old)
         journal = {"previous": old.name if old else None, "target": target.name, "phase": "database"}
         write_json(self.pending, journal)
         if old:
             self.compose(old, "stop", "caddy", *self.services(old))
+        if change_database:
+            # The preflight backup does not contain writes received before shutdown.
+            # Capture again only after every application writer has stopped.
+            journal["phase"] = "database-backup"
+            write_json(self.pending, journal)
+            expected_counts = self.database_counts(old)
+            dump = self.backup(old)
+            journal.update(phase="database-restore", backup=str(dump))
+            write_json(self.pending, journal)
         self.compose(target, "up", "-d", "--wait", "--wait-timeout", "120", "postgres")
+        if change_database:
+            self.restore_database(target, dump, expected_counts)
         journal["phase"] = "migration"
         write_json(self.pending, journal)
         try:
@@ -469,7 +539,7 @@ class Installation:
                 self.ingestion_smoke(target)
         except (Failure, OSError) as exc:
             target_schema = metadata(target)["schemaVersion"]
-            if old and target_schema in metadata(old)["rollbackFromSchemaVersions"]:
+            if old and not change_database and target_schema in metadata(old)["rollbackFromSchemaVersions"]:
                 self.compose(target, "stop", "caddy", *self.services(target))
                 self.ready(old)
                 self.pending.unlink()
@@ -506,6 +576,8 @@ class Installation:
         if not previous or not SHA.fullmatch(previous) or current is None:
             raise Failure("No previous release is available.")
         target = self.root / "releases" / previous
+        if self.database_runtime(current) != self.database_runtime(target):
+            raise Failure("Database runtime changed. Restore with the recovery guide; switching volumes could lose new writes.")
         if metadata(current)["schemaVersion"] not in metadata(target)["rollbackFromSchemaVersions"]:
             raise Failure("The previous release does not support the current database schema.")
         write_json(self.pending, {"previous": current.name, "target": target.name, "phase": "rollback"})

@@ -42,6 +42,9 @@ class CaddyUploadTests(unittest.TestCase):
             if os.environ.get("CI"):
                 self.fail("Caddy or Linux Docker is required to verify upload routing")
             self.skipTest("Install verified Caddy to check upload routing locally")
+        if not CADDY.is_file():
+            subprocess.run([DOCKER, "build", "--file", "docker/Dockerfile", "--target", "caddy",
+                            "--tag", "getexception-caddy:route-test", "."], cwd=ROOT, check=True, timeout=300)
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), BodySink)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -72,10 +75,8 @@ class CaddyUploadTests(unittest.TestCase):
             if CADDY.is_file():
                 command = [str(CADDY), "run", "--config", str(config), "--adapter", "caddyfile"]
             else:
-                # Use the same digest-pinned image as the installation, without publishing ports.
-                image = next(line.split("image:", 1)[1].strip()
-                             for line in (ROOT / "deploy/compose.yaml").read_text().splitlines()
-                             if "image: caddy:" in line)
+                # Same checksum-pinned binary and Docker target as the published installation.
+                image = "getexception-caddy:route-test"
                 command = [DOCKER, "run", "--rm", "--network", "host", "--read-only",
                            "--mount", f"type=bind,src={directory},dst=/probe,readonly",
                            image, "caddy", "run", "--config", "/probe/Caddyfile", "--adapter", "caddyfile"]

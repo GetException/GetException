@@ -140,7 +140,8 @@ services:
           "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
   caddy:
-    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    build: { context: ., dockerfile: docker/Dockerfile, target: caddy }
+    image: getexception-caddy:${IMAGE_TAG:-local}
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]

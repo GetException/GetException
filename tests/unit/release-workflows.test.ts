@@ -76,7 +76,7 @@ describe("automatic SDK and server release", () => {
       ]),
     );
     expect(JSON.stringify(config.jobs["build-images"])).toContain(
-      "--fail-on high",
+      "scripts/release/scan-image.py",
     );
     expect(config.jobs["publish-bootstrap"].needs).toEqual(
       expect.arrayContaining(["build-images", "scan-infrastructure"]),

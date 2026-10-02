@@ -2,9 +2,15 @@
 
 ## Решение
 
-**Подключение production-приложения пока блокируется.** Прикладные исправления подготовлены в рабочем дереве поверх `a900d14`; сервер и npm-пакеты этой версией не обновлялись. Открыты вопросы инфраструктурных образов, внешнего backup и проверки итогового выпуска на Linux.
+**Подключение production-приложения пока блокируется.** Прикладные исправления опубликованы в ветке `audit/production-readiness-2026-10-01`, commit `7dec6c4`, поверх `a900d14`; сервер и npm-пакеты этой версией не обновлялись. Linux Checks этого commit прошёл. Открыты вопросы инфраструктурных образов, внешнего backup и проверки опубликованного выпуска.
 
 Проверка сопоставляет реализацию с ADR-0001, уточнениями ADR-0002/0003, SECURITY-AUDIT, CONTEXT и планом. Осмотрены SDK/CLI, входные HTTP-границы, права БД, auth и управление доступом, обработка/хранение событий, source maps, кабинет, контейнеры и release-цепочка. Данные действующей установки проверялись отдельно от временных тестовых БД.
+
+### Подготовка выпуска · 2 октября
+
+Следующий патч сохраняет PostgreSQL 17 и переводит production runtime на официальный Alpine image через логическое восстановление в отдельный volume ([ADR-0004](../0004-infrastructure-runtime-upgrades.md)). Caddy 2.11.6 собирается в минимальный образ из официального checksum-проверенного бинарника. Оценка одного неприменимого zlib CVE ограничена точными компонентами и сроком; все остальные High/Critical продолжают блокировать выпуск. Обоснование и границы записаны в [image-security.md](image-security.md).
+
+Локально подтверждены: Grype для официального бинарника Caddy 2.11.6 — без находок; лимиты proxy/upload — успешно; PostgreSQL Alpine — одна High-находка zlib с указанной оценкой, три Medium-совпадения BusyBox. Изолированная проверка на Linux Docker выполнила настоящий bookworm → Alpine перенос синтетической базы через установщик: совпали содержимое строк, Unicode, binary fields; прежний volume сохранился. Рабочая БД в этой проверке не использовалась. В обязательный Docker CI добавлены заполненная база, сохранённая сессия и повторный вход по паролю + TOTP после переноса; результат этого нового сценария должен быть подтверждён до выпуска. Отчёты готовых app/Caddy images и фактический deploy остаются отдельными Release gates.
 
 ## Требования и результат
 
@@ -37,17 +43,17 @@
 
 ## Проверки
 
-| Проверка                       | Состояние                                                                                                                                                                                                   |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `yarn install --immutable`     | Успешно на Node 24.21.0 / Yarn 4.17.1. Остались upstream peer warnings Prisma Studio/MySQL typings; Studio не запускается.                                                                                  |
-| `yarn checks`                  | Успешно на Node 24.21.0: format, ESLint, architecture, 56 deployment/backup, secrets/licenses, npm audit, types, 206 unit, build, npm aliases и 66 integration. Linux Docker локально пропущен.             |
-| HTTPS Playwright               | 2 сценария успешно, Chrome 154.0.8037.58 + Caddy 2.11.4. Закреплённый Playwright Chromium не поддерживает macOS 13; его запуск требуется в Linux CI.                                                        |
-| Всплеск ingest                 | 50 одновременных запросов: 50 HTTP 200, 50 durable inbox, 50 обработанных событий. p95 156 мс, максимум 157 мс; обработка четырьмя workers около 242 мс. Изолированный native loopback, не production-сеть. |
-| Secret scan                    | Gitleaks проверяет отслеживаемые и новые исходники; секретов не найдено. Runtime, backups, временные БД, карты и logs исключены из Git.                                                                     |
-| Linux Docker/bootstrap/restore | В эту проверку рабочего дерева ещё не запускались: локально нет Docker/Linux. Обязательный CI-сценарий расширен восстановлением PostgreSQL dump после age encryption/unpack.                                |
-| Image scan                     | Выполнен Grype 0.118.0 с базой от 1 октября. Результат отрицательный; детали ниже.                                                                                                                          |
+| Проверка                       | Состояние                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `yarn install --immutable`     | Успешно на Node 24.21.0 / Yarn 4.17.1. Остались upstream peer warnings Prisma Studio/MySQL typings; Studio не запускается.                                                                                                                                                                                                                      |
+| `yarn checks`                  | Успешно на Node 24.21.0: format, ESLint, architecture, 56 deployment/backup, secrets/licenses, npm audit, types, 206 unit, build, npm aliases и 66 integration. Linux Docker локально пропущен.                                                                                                                                                 |
+| HTTPS Playwright               | 2 сценария успешно, Chrome 154.0.8037.58 + Caddy 2.11.4. Закреплённый Playwright Chromium не поддерживает macOS 13; его запуск требуется в Linux CI.                                                                                                                                                                                            |
+| Всплеск ingest                 | 50 одновременных запросов: 50 HTTP 200, 50 durable inbox, 50 обработанных событий. p95 156 мс, максимум 157 мс; обработка четырьмя workers около 242 мс. Изолированный native loopback, не production-сеть.                                                                                                                                     |
+| Secret scan                    | Gitleaks проверяет отслеживаемые и новые исходники; секретов не найдено. Runtime, backups, временные БД, карты и logs исключены из Git.                                                                                                                                                                                                         |
+| Linux Docker/bootstrap/restore | Успешно в [Linux Checks для 7dec6c4](https://github.com/GetException/GetException/actions/runs/36916871370): четыре app images, установка, приём событий, обновление, откат и восстановление PostgreSQL dump после age encryption/unpack. Это проверка собранных в CI образов; published bootstrap/registry проверяются следующим Release gate. |
+| Image scan                     | Выполнен Grype 0.118.0 с базой от 1 октября. Результат отрицательный; детали ниже.                                                                                                                                                                                                                                                              |
 
-Локальные доказательства находятся в игнорируемой `.artifacts`: `production-checks-final.log`, `production-e2e.log`, `production-load.json`, `grype-postgres.json`, `grype-caddy.json`, `grype-candidate-postgres.json`, `grype-candidate-node.json`. Снимки очищенного dashboard находятся в `test-results`. Эти файлы не включаются в релиз.
+Локальные доказательства находятся в игнорируемой `.artifacts`: `production-precommit-checks.log`, `production-e2e-final.log`, `production-linux-ci.log`, `production-load.json`, `grype-postgres.json`, `grype-caddy.json`, `grype-candidate-postgres.json`, `grype-candidate-node.json`. Снимки очищенного dashboard находятся в `test-results`. Эти файлы не включаются в релиз.
 
 ## Открытые блокеры
 
@@ -72,7 +78,7 @@
 
 ### 3. Проверка выпуска и среды
 
-- Пройти Linux Docker build/start/upgrade, restore зашифрованного dump, registry smoke и bootstrap E2E на точном SHA исправлений. Локальные unit/integration/native E2E этого не заменяют.
+- Linux Docker build/start/upgrade/rollback и restore зашифрованного dump уже подтверждены Checks для `7dec6c4`. После устранения image findings должны пройти gates опубликованных SDK/registry и опубликованного bootstrap в Release.
 - На осмотренном сервере опубликованы только 22/80/443, runtime-порты и PostgreSQL закрыты. SSH password/KbdInteractive login выключены, root допускается по ключу. Host INPUT policy — ACCEPT; нужна проверенная firewall policy с сохранением SSH и Docker networks.
 - Шифрование диска провайдером не подтверждено. Отсутствие crypt device внутри VM не доказывает отсутствия provider encryption.
 - GitHub workflow token по умолчанию read-only. Ветка `stable` не защищена. Нужна защита от force push/удаления и обязательные проверки, согласованные с текущим release bot, который создаёт version commit; произвольное включение branch policy может сломать автоматический выпуск.

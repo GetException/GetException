@@ -26,6 +26,7 @@ test("installed release: setup, real SDK events and preserved login", async ({
   }
 
   const sessionFile = join(directory, "runtime/browser-session.json");
+  const credentialsFile = join(directory, "runtime/browser-credentials.json");
   const restored = process.env.DEPLOYMENT_VERIFY_RESTART === "1";
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,
@@ -43,6 +44,38 @@ test("installed release: setup, real SDK events and preserved login", async ({
       await expect(
         page.getByText("Browser fixture error", { exact: false }).first(),
       ).toBeVisible();
+
+      const credentials = JSON.parse(readFileSync(credentialsFile, "utf8")) as {
+        email: string;
+        password: string;
+        secret: string;
+        counter: number;
+      };
+
+      await context.clearCookies();
+      await page.goto(origin + "/login");
+      await page.getByLabel("Email", { exact: true }).fill(credentials.email);
+      await page
+        .getByLabel("Password", { exact: true })
+        .fill(credentials.password);
+      await expect
+        .poll(() => Math.floor(Date.now() / 30_000), { timeout: 65_000 })
+        .toBeGreaterThan(credentials.counter);
+
+      const counter = Math.floor(Date.now() / 30_000);
+
+      await fillOtp(page, totp(credentials.secret, BigInt(counter)));
+      await expect(
+        page.getByRole("heading", { name: "Overview." }),
+      ).toBeVisible();
+      writeFileSync(
+        credentialsFile,
+        JSON.stringify({ ...credentials, counter }),
+        { mode: 0o600 },
+      );
+      writeFileSync(sessionFile, JSON.stringify(await context.storageState()), {
+        mode: 0o600,
+      });
 
       return;
     }
@@ -84,7 +117,15 @@ test("installed release: setup, real SDK events and preserved login", async ({
     await expect(
       page.getByRole("heading", { name: "Overview." }),
     ).toBeVisible();
-    const code = totp(secret, BigInt(Math.floor(Date.now() / 30_000)) + 1n);
+    const counter = Math.floor(Date.now() / 30_000) + 1;
+    const code = totp(secret, BigInt(counter));
+
+    // Random credentials for this disposable database only; never uploaded as artifacts.
+    writeFileSync(
+      credentialsFile,
+      JSON.stringify({ email, password, secret, counter }),
+      { mode: 0o600 },
+    );
     const stepUp = await page.evaluate(
       async (data) => {
         const response = await fetch("/api/dashboard/step-up", {

@@ -8,7 +8,7 @@ import urllib.request
 
 
 def existing_digest(target, sha, token):
-    if target not in ["web", "ingest", "worker", "migrate"] or not re.fullmatch(r"[a-f0-9]{40}", sha):
+    if target not in ["web", "ingest", "worker", "migrate", "caddy"] or not re.fullmatch(r"[a-f0-9]{40}", sha):
         raise RuntimeError("Invalid image identity")
     # GHCR can return DENIED before a package's first publication. Distinguish this
     # from a failed lookup of an existing package using the authenticated Packages API.

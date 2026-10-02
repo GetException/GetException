@@ -26,8 +26,8 @@ def run(args, **kwargs):
     subprocess.run(args, check=True, **kwargs)
 
 
-def run_compose(arguments, redactions, *, stdout=subprocess.PIPE):
-    result = subprocess.run(arguments, stdout=stdout, stderr=subprocess.PIPE, timeout=600)
+def run_compose(arguments, redactions, *, stdout=subprocess.PIPE, stdin=None):
+    result = subprocess.run(arguments, stdout=stdout, stdin=stdin, stderr=subprocess.PIPE, timeout=600)
     if result.returncode:
         detail = result.stderr.decode(errors="replace")
         for value in sorted(set(redactions), key=len, reverse=True):
@@ -61,7 +61,7 @@ def main():
         work = Path(temporary).resolve()
         root = work / "installation"
         images = {}
-        names = ["web", "ingest", "worker", "migrate"]
+        names = ["web", "ingest", "worker", "migrate", "caddy"]
         sha = args.published or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         env = dict(os.environ)
         env.update(ACME_EMAIL="")
@@ -135,7 +135,7 @@ def main():
         image_env.write_text(installer.env_text({name.upper() + "_IMAGE": reference for name, reference in images.items()}))
 
         class DockerInstallation(installer.Installation):
-            def compose(self, target, *arguments, stdout=subprocess.PIPE, output_limit=None):
+            def compose(self, target, *arguments, stdout=subprocess.PIPE, output_limit=None, stdin=None):
                 # Local build tags are available only in this isolated test, never in the production controller.
                 if arguments == ("pull",) and args.build:
                     return ""
@@ -146,7 +146,7 @@ def main():
                                     "-f", str(work / "override.json"), *arguments]
                 if output_limit is not None:
                     return installer.run_limited(command, env=None, output=stdout, limit=output_limit, timeout=600)
-                return run_compose(command, redactions, stdout=stdout)
+                return run_compose(command, redactions, stdout=stdout, stdin=stdin)
 
             def smoke(self, target, *, defer_ingest_dns=False):
                 # This test uses a local CA; production smoke never disables certificate verification.
@@ -166,8 +166,27 @@ def main():
                              "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1))")
 
         installation = DockerInstallation(root)
+        # A real cross-libc upgrade: same application schema is separately tested
+        # on empty/previous schemas by integration tests. Here preserve actual
+        # Owner/MFA/events through pg_dump/restore instead of remounting PGDATA.
+        legacy = root / "releases" / secrets.token_hex(20)
+        shutil.copytree(release, legacy)
+        legacy_info = installer.metadata(legacy)
+        legacy_info["sha"] = legacy.name
+        legacy_info.pop("databaseRuntime", None)
+        installer.write_json(legacy / "release.json", legacy_info)
+        legacy_compose = (legacy / "compose.yaml").read_text().replace(
+            "postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24",
+            "postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652",
+        ).replace("postgres-data-alpine-v1", "postgres-data")
+        (legacy / "compose.yaml").write_text(legacy_compose)
         try:
-            installation.deploy(release, first=True)
+            # First verify migrations on a truly empty Alpine database. This is
+            # this random test project only; no production/local volumes exist here.
+            installation.compose(release, "up", "-d", "--wait", "postgres")
+            installation.compose(release, "run", "--rm", "--no-deps", "migrate")
+            installation.compose(release, "down", "--volumes", "--remove-orphans")
+            installation.deploy(legacy, first=True)
             test_env = {**os.environ, "DEPLOYMENT_TEST_DIR": str(root), "DEPLOYMENT_TEST_PROJECT": project}
             run(["corepack", "yarn", "playwright", "test", "--config", "playwright.deployment.config.ts"], env=test_env)
             query = 'SELECT (SELECT count(*) FROM "user"), (SELECT count(*) FROM member), (SELECT count(*) FROM project), (SELECT count(*) FROM error_event)'
@@ -184,6 +203,13 @@ def main():
             if grouped != "4|2":
                 raise RuntimeError("Repeated SDK errors were not grouped")
             config_before = (root / "runtime/.env").read_bytes()
+            installation.deploy(release)
+            after_runtime = installation.compose(release, "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "getexception", "-Atc", query)
+            if after_runtime != before or config_before != (root / "runtime/.env").read_bytes():
+                raise RuntimeError("Database runtime migration changed persistent accounts/events/keys")
+            # A preserved password + TOTP must still authenticate after restoration.
+            run(["corepack", "yarn", "playwright", "test", "--config", "playwright.deployment.config.ts"],
+                env={**test_env, "DEPLOYMENT_VERIFY_RESTART": "1"})
             # Exercise real update + compatible rollback using another release identity and the same tested images.
             candidate = root / "releases" / secrets.token_hex(20)
             shutil.copytree(release, candidate)
@@ -233,7 +259,8 @@ def main():
         finally:
             # The project name is generated above, never the developer or production Compose project.
             installation.compose(release, "down", "--volumes", "--remove-orphans")
-    print("Docker bootstrap, event ingestion, update and rollback passed.")
+            installation.compose(legacy, "down", "--volumes", "--remove-orphans")
+    print("Docker bootstrap, PostgreSQL runtime migration, event ingestion, update and rollback passed.")
 
 
 if __name__ == "__main__":

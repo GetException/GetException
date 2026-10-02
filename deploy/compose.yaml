@@ -22,7 +22,7 @@ x-health: &health
   start_period: 30s
 services:
   postgres:
-    image: postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
+    image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     restart: unless-stopped
     environment:
       POSTGRES_DB: getexception
@@ -36,7 +36,7 @@ services:
       BACKUP_PASSWORD: ${BACKUP_PASSWORD:?Run the production installer}
     volumes:
       [
-        postgres-data:/var/lib/postgresql/data,
+        postgres-data-alpine-v1:/var/lib/postgresql/data,
         ./init-db.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro,
       ]
     networks: [database]
@@ -136,7 +136,7 @@ services:
           "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
   caddy:
-    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    image: ${CADDY_IMAGE:?Use a verified release}
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
@@ -169,6 +169,6 @@ networks:
   database: { internal: true }
 volumes:
   source-maps:
-  postgres-data: {}
+  postgres-data-alpine-v1: {}
   caddy-data: {}
   caddy-config: {}
