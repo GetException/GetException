@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { verifyMemberDeletion } from "../../e2e/member-deletion-scenario";
 import { totp } from "../../apps/web/src/server/crypto";
 
 async function fillOtp(page: Page, code: string) {
@@ -140,76 +141,9 @@ test("installed release: setup, real SDK events and preserved login", async ({
     );
 
     expect(stepUp).toBe(200);
-    phase = "manual invitation";
-    await page.goto(origin + "/members");
-    await page.getByLabel("Email", { exact: true }).fill("viewer@example.test");
-    await page.getByRole("checkbox").first().check();
-    await page
-      .getByRole("button", { name: "Create invitation link", exact: true })
-      .click();
-    await expect(page.getByTestId("invitation-link")).toContainText("/invite#");
-
-    phase = "delete member";
-    const invitationLink = await page
-      .getByTestId("invitation-link")
-      .innerText();
-    const memberContext = await browser.newContext({ ignoreHTTPSErrors: true });
-
-    try {
-      const memberPage = await memberContext.newPage();
-
-      await memberPage.goto(invitationLink);
-      await memberPage.getByLabel("Your name").fill("Temporary member");
-      await memberPage
-        .locator("form")
-        .filter({
-          has: memberPage.getByRole("button", {
-            name: "Continue to authenticator",
-          }),
-        })
-        .getByLabel("Password", { exact: true })
-        .fill(randomBytes(24).toString("hex"));
-      const enrollment = memberPage.waitForResponse((response) =>
-        response.url().endsWith("/api/invitations/begin-registration"),
-      );
-
-      await memberPage
-        .getByRole("button", { name: "Continue to authenticator" })
-        .click();
-      const memberSecret = (await (await enrollment).json()).secret as string;
-
-      await fillOtp(
-        memberPage,
-        totp(memberSecret, BigInt(Math.floor(Date.now() / 30_000))),
-      );
-      await memberPage.getByRole("link", { name: /I saved my codes/ }).click();
-      await expect(
-        memberPage.getByRole("heading", { name: "Overview." }),
-      ).toBeVisible();
-      await page.goto(origin + "/members");
-      await page
-        .getByRole("link", { name: "Temporary member", exact: true })
-        .click();
-      await page.getByLabel("Confirm member email").fill("wrong@example.test");
-      await page
-        .getByRole("button", { name: "Delete member", exact: true })
-        .click();
-      await expect(page.getByRole("alert")).toContainText(
-        "Enter this member's email",
-      );
-      await page.getByLabel("Confirm member email").fill("viewer@example.test");
-      await page
-        .getByRole("button", { name: "Delete member", exact: true })
-        .click();
-      await expect(page).toHaveURL(origin + "/members");
-      await expect(
-        page.getByRole("link", { name: "Temporary member", exact: true }),
-      ).toHaveCount(0);
-      await memberPage.reload();
-      await expect(memberPage).toHaveURL(origin + "/login");
-    } finally {
-      await memberContext.close();
-    }
+    await verifyMemberDeletion(browser, page, origin, (step) => {
+      phase = "member deletion: " + step;
+    });
 
     phase = "project";
     await page.goto(origin + "/projects/new");

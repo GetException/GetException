@@ -2,12 +2,15 @@ import { test, expect } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { totp } from "../apps/web/src/server/crypto";
 import { startStack } from "./stack";
+import { verifyMemberDeletion } from "./member-deletion-scenario";
 import { fillOtp } from "./otp";
 
 test("login keeps two columns and submits on the sixth authenticator digit", async ({
   browser,
 }) => {
   const stack = await startStack();
+
+  let phase = "login";
 
   try {
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -55,10 +58,13 @@ test("login keeps two columns and submits on the sixth authenticator digit", asy
     await expect(
       page.getByRole("heading", { name: "Overview." }),
     ).toBeVisible();
+    await verifyMemberDeletion(browser, page, stack.origin, (step) => {
+      phase = step;
+    });
     await context.close();
   } catch {
     // Playwright errors from setup/login can include credentials entered into the form.
-    throw new Error("Login E2E failed; sensitive diagnostics were suppressed.");
+    throw new Error("Login/member E2E failed during: " + phase);
   } finally {
     await stack.cleanup();
   }
