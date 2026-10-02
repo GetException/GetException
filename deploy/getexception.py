@@ -505,8 +505,10 @@ class Installation:
             self.smoke(old)
         self.compose(target, "config", "--quiet")
         self.compose(target, "pull")
-        self.compose(target, "run", "--rm", "--no-deps", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
+        # Compose run may create every declared volume, even with --no-deps.
+        # Inspect the untouched database destination before starting any container.
         change_database = self.database_preflight(old, target)
+        self.compose(target, "run", "--rm", "--no-deps", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
         if old:
             self.backup(old)
         journal = {"previous": old.name if old else None, "target": target.name, "phase": "database"}

@@ -210,6 +210,41 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(installer.Failure, "unfinished"):
             installation.deploy(target)
 
+    def test_database_destination_is_checked_before_compose_creates_volumes(self):
+        installation, old = self.active()
+        target = self.release()
+        info = installer.metadata(target)
+        info["databaseRuntime"] = installer.DATABASE_CURRENT
+        installer.write_json(target / "release.json", info)
+        volume = "test_postgres-data-alpine-v1"
+        config = {"services": {"postgres": {"volumes": [{"source": "postgres-data-alpine-v1", "target": "/var/lib/postgresql/data"}]}},
+                  "volumes": {"postgres-data-alpine-v1": {"name": volume}}}
+        volumes = []
+        original_compose = installation.compose
+
+        def compose(release, *args, **kwargs):
+            if args == ("config", "--format", "json"):
+                return json.dumps(config)
+            if args[0] == "run":
+                volumes.append(volume)
+            return original_compose(release, *args, **kwargs)
+
+        def docker(args, **kwargs):
+            if args[:3] == ["docker", "volume", "ls"]:
+                return "\n".join(volumes)
+            return str(self.root)
+
+        with patch.object(installation, "compose", side_effect=compose), \
+             patch.object(installer, "run", side_effect=docker), \
+             patch.object(installer.shutil, "disk_usage", return_value=shutil._ntuple_diskusage(100 * 1024**3, 0, 100 * 1024**3)), \
+             patch.object(installation, "database_sql", side_effect=["1024", "0"]), \
+             patch.object(installation, "database_counts", return_value="user|1"), \
+             patch.object(installation, "restore_database") as restore:
+            installation.deploy(target)
+        restore.assert_called_once()
+        self.assertEqual(installation.current(), target)
+        self.assertTrue(volumes)
+
     def test_database_preflight_rejects_existing_target_volume_before_downtime(self):
         installation, old = self.active()
         target = self.release()
