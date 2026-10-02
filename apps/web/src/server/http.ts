@@ -130,6 +130,8 @@ export async function safeRoute(fn: () => Promise<Response>) {
       mfa_enrollment_expired:
         "Authenticator setup expired. Sign in again to restart it.",
       last_owner: "The workspace must keep at least one active Owner.",
+      member_self_delete: "You cannot delete your own account.",
+      member_confirmation: "Enter this member's email to confirm deletion.",
       owner_mfa:
         "This member must enable an authenticator in Settings before becoming an Owner.",
       project_team: "Every project must belong to at least one team.",

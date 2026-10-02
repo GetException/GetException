@@ -3,6 +3,7 @@ import { dashboardOwner } from "../../../../server/dashboard";
 import { getRuntime } from "../../../../server/runtime";
 import { Heading } from "../../../../components/dashboard/Heading";
 import { MemberForm } from "../../../../components/members/MemberForm";
+import { DeleteMemberForm } from "../../../../components/members/DeleteMemberForm";
 
 export default async function MemberPage({
   params,
@@ -46,6 +47,12 @@ export default async function MemberPage({
           teams={teams}
         />
       </section>
+      {member.userId !== current.userId && (
+        <section className="panel form-panel danger-panel">
+          <h2>Delete member</h2>
+          <DeleteMemberForm id={member.id} email={member.user.email} />
+        </section>
+      )}
     </div>
   );
 }

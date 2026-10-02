@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Form } from "../forms/Form";
 import { StepUpForm } from "../forms/StepUpForm";
-import { useProjectMutation } from "./use-project-mutation";
+import { useStepUpMutation } from "../forms/use-step-up-mutation";
 import { dateTime } from "../../lib/format";
 import { CopyButton } from "../forms/CopyButton";
 
@@ -23,7 +23,7 @@ export function SourceMapTokens({
   }[];
 }) {
   const [secret, setSecret] = useState("");
-  const mutation = useProjectMutation();
+  const mutation = useStepUpMutation();
   const router = useRouter();
 
   if (gitlabManaged && !tokens.length) {

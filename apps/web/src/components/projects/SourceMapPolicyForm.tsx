@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Form } from "../forms/Form";
 import { StepUpForm } from "../forms/StepUpForm";
-import { useProjectMutation } from "./use-project-mutation";
+import { useStepUpMutation } from "../forms/use-step-up-mutation";
 import { TrustedPreviewSources } from "./TrustedPreviewSources";
 import {
   sourceMapPolicySchema,
@@ -19,7 +19,7 @@ export function SourceMapPolicyForm({
   settings: SourceMapSettings;
 }) {
   const router = useRouter();
-  const mutation = useProjectMutation();
+  const mutation = useStepUpMutation();
   const [previewEnabled, setPreviewEnabled] = useState(settings.previewEnabled);
   const [trustedSources, setTrustedSources] = useState(settings.trustedSources);
   const [saved, setSaved] = useState(false);

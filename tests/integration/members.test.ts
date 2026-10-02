@@ -14,7 +14,13 @@ import { AuthService } from "../../apps/web/src/server/auth-service";
 import { createRuntime } from "../../apps/web/src/server/runtime";
 import { digest, token, totp } from "../../apps/web/src/server/crypto";
 import { InvitationService } from "../../apps/web/src/server/invitations/service";
-import { saveMember, saveTeam } from "../../apps/web/src/server/members";
+import {
+  deleteMember,
+  saveMember,
+  saveTeam,
+} from "../../apps/web/src/server/members";
+import * as runtimes from "../../apps/web/src/server/runtime";
+import { DELETE } from "../../apps/web/src/app/api/dashboard/access/[resource]/[[...path]]/route";
 import { MfaService } from "../../apps/web/src/server/mfa";
 import { projectScope, teamScope } from "../../apps/web/src/server/access";
 import { changeIssueStatus } from "../../apps/web/src/server/issue-workflow";
@@ -23,6 +29,7 @@ import { createProject } from "../../apps/web/src/server/projects";
 let instance: Awaited<ReturnType<typeof temporaryDatabase>>;
 let web: Database;
 let service: AuthService;
+let runtime: ReturnType<typeof createRuntime>;
 let invitations: InvitationService;
 let ownerHeaders: Headers;
 let ownerId: string;
@@ -36,7 +43,6 @@ async function loginRequest(
   email: string,
   factor: { code?: string; recoveryCode?: string } = {},
 ) {
-  const runtime = createRuntime(service.config, web);
   const response = await runtime.auth.handler(
     new Request(service.config.DASHBOARD_ORIGIN + "/api/auth/owner/login", {
       method: "POST",
@@ -126,6 +132,7 @@ beforeAll(async () => {
     TOTP_ENCRYPTION_KEY: token(),
     AUTH_RATE_KEY: token(),
   });
+  runtime = createRuntime(service.config, web);
   invitations = new InvitationService(service);
 });
 
@@ -436,6 +443,257 @@ describe("manual invitations", () => {
 });
 
 describe("server-side roles and mandatory MFA", () => {
+  async function deleteRequest(
+    headers: Headers,
+    id: string,
+    email: string,
+    origin = service.config.DASHBOARD_ORIGIN,
+  ) {
+    const spy = vi.spyOn(runtimes, "getRuntime").mockReturnValue(runtime);
+
+    try {
+      const requestHeaders = new Headers(headers);
+
+      requestHeaders.set("Origin", origin);
+      requestHeaders.set("Content-Type", "application/json");
+
+      return await DELETE(
+        new Request(
+          `${service.config.DASHBOARD_ORIGIN}/api/dashboard/access/members/${id}`,
+          {
+            method: "DELETE",
+            headers: requestHeaders,
+            body: JSON.stringify({ email }),
+          },
+        ),
+        { params: Promise.resolve({ resource: "members", path: [id] }) },
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("protects deletion with Owner access, same-origin requests and fresh TOTP", async () => {
+    const developer = await participant("developer@example.test");
+    const viewer = await participant("viewer@example.test", "viewer");
+
+    for (const headers of [developer.headers, viewer.headers]) {
+      expect(
+        (
+          await deleteRequest(
+            headers,
+            developer.member.id,
+            developer.user.email,
+          )
+        ).status,
+      ).toBe(403);
+    }
+
+    expect(
+      (
+        await deleteRequest(
+          new Headers(),
+          developer.member.id,
+          developer.user.email,
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await deleteRequest(
+          ownerHeaders,
+          developer.member.id,
+          developer.user.email,
+          "https://other.example.test",
+        )
+      ).status,
+    ).toBe(403);
+    const owner = await service.authorize(ownerHeaders);
+
+    await web.session.update({
+      where: { id: owner.session.id },
+      data: { mfaVerifiedAt: new Date(Date.now() - 301_000) },
+    });
+    expect(
+      (
+        await deleteRequest(
+          ownerHeaders,
+          developer.member.id,
+          developer.user.email,
+        )
+      ).status,
+    ).toBe(428);
+    await web.session.update({
+      where: { id: owner.session.id },
+      data: { mfaVerifiedAt: new Date(), mfaMethod: "recovery" },
+    });
+    expect(
+      (
+        await deleteRequest(
+          ownerHeaders,
+          developer.member.id,
+          developer.user.email,
+        )
+      ).status,
+    ).toBe(428);
+    expect(await web.user.count()).toBe(3);
+    expect(
+      await web.auditLog.count({ where: { action: "member_delete" } }),
+    ).toBe(0);
+  });
+
+  it("requires the selected email, rejects self-deletion and unknown members", async () => {
+    const target = await participant("target@example.test");
+
+    await expect(
+      deleteMember(service, ownerHeaders, ownerId, { email: ownerEmail }),
+    ).rejects.toMatchObject({ reason: "member_self_delete" });
+    await expect(
+      deleteMember(service, ownerHeaders, target.member.id, {
+        email: ownerEmail,
+      }),
+    ).rejects.toMatchObject({ reason: "member_confirmation" });
+    await expect(
+      deleteMember(service, ownerHeaders, randomUUID(), {
+        email: target.user.email,
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(await web.user.count()).toBe(2);
+  });
+
+  it("deletes credentials and invitations atomically, preserves project data and allows a fresh invitation", async () => {
+    const target = await participant("target@example.test");
+    const teammate = await participant("teammate@example.test");
+    const pending = await invite("pending@example.test");
+    const enrollment = await invitations.beginRegistration(
+      pending.value,
+      { name: "Pending", password },
+      "pending",
+    );
+
+    await web.invitation.updateMany({
+      where: { id: { in: [pending.id, teammate.invitation.id] } },
+      data: { inviterId: target.user.id },
+    });
+    const project = await createProject(service, ownerHeaders, {
+      name: "Preserved",
+      slug: "preserved",
+      origins: ["https://app.example.test"],
+    });
+    const issue = await instance.admin.issue.create({
+      data: {
+        projectId: project.id,
+        fingerprint: token(),
+        title: "Keep",
+        exceptionType: "Error",
+        firstSeen: new Date(),
+        lastSeen: new Date(),
+      },
+    });
+    const beforeAudit = await web.auditLog.count();
+    const response = await deleteRequest(
+      ownerHeaders,
+      target.member.id,
+      target.user.email,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(
+      await web.user.findUnique({ where: { id: target.user.id } }),
+    ).toBeNull();
+
+    const where = { userId: target.user.id };
+
+    expect(
+      await Promise.all([
+        web.account.count({ where }),
+        web.session.count({ where }),
+        web.mfaCredential.count({ where }),
+        web.recoveryCode.count({ where }),
+        web.member.count({ where }),
+        web.teamMember.count({ where }),
+      ]),
+    ).toEqual([0, 0, 0, 0, 0, 0]);
+
+    expect(
+      await web.invitation.count({
+        where: {
+          OR: [{ email: target.user.email }, { inviterId: target.user.id }],
+        },
+      }),
+    ).toBe(0);
+    expect(await web.invitationEnrollment.count()).toBe(0);
+    expect(await web.auditLog.count()).toBe(beforeAudit + 1);
+    expect(
+      await web.auditLog.findFirst({ where: { action: "member_delete" } }),
+    ).toMatchObject({
+      actorId: (await service.authorize(ownerHeaders)).user.id,
+      success: true,
+    });
+    expect(
+      await web.issue.findUnique({ where: { id: issue.id } }),
+    ).not.toBeNull();
+    expect(
+      await web.project.findUnique({ where: { id: project.id } }),
+    ).not.toBeNull();
+    await expect(service.authorize(target.headers)).rejects.toMatchObject({
+      status: 401,
+    });
+    await expect(service.authorize(teammate.headers)).resolves.toBeDefined();
+    await expect(invitations.preview(pending.value)).rejects.toMatchObject({
+      status: 410,
+    });
+    await expect(
+      invitations.finishRegistration(
+        enrollment.enrollmentToken,
+        { code: totp(enrollment.secret, period()) },
+        "stale",
+      ),
+    ).rejects.toMatchObject({ status: 410 });
+    await expect(
+      service.login(
+        {
+          email: target.user.email,
+          password,
+          recoveryCode: target.enrollment.recoveryCodes[0],
+          trustDevice: false,
+        },
+        "deleted",
+      ),
+    ).rejects.toThrow();
+    const returned = await participant(target.user.email);
+
+    expect(returned.user.id).not.toBe(target.user.id);
+    expect(returned.enrollment.secret).not.toBe(target.enrollment.secret);
+  });
+
+  it("keeps one Owner when two Owners try to delete each other concurrently", async () => {
+    const second = await participant("second@example.test");
+
+    await web.member.update({
+      where: { id: second.member.id },
+      data: { role: "owner" },
+    });
+    const results = await Promise.allSettled([
+      deleteMember(service, ownerHeaders, second.member.id, {
+        email: second.user.email,
+      }),
+      deleteMember(service, second.headers, ownerId, { email: ownerEmail }),
+    ]);
+
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      await web.member.count({ where: { role: "owner", active: true } }),
+    ).toBe(1);
+    expect(await web.user.count()).toBe(1);
+    expect(
+      await web.auditLog.count({ where: { action: "member_delete" } }),
+    ).toBe(1);
+  });
+
   it("scopes Developer and Viewer access to teams and restricts mutations", async () => {
     const developer = await participant("developer@example.test", "developer", [
       teamIds[0]!,

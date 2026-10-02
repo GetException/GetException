@@ -2,7 +2,32 @@ import { z } from "zod";
 import { getRuntime } from "../../../../../../server/runtime";
 import { json, readBody, safeRoute } from "../../../../../../server/http";
 import { InvitationService } from "../../../../../../server/invitations/service";
-import { saveMember, saveTeam } from "../../../../../../server/members";
+import {
+  deleteMember,
+  saveMember,
+  saveTeam,
+} from "../../../../../../server/members";
+
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ resource: string; path?: string[] }> },
+) {
+  return safeRoute(async () => {
+    const { resource, path = [] } = await context.params;
+    const input = await readBody(request);
+    const [id] = path;
+
+    if (resource !== "members" || !id || path.length !== 1) {
+      return json({ error: "Not found" }, 404);
+    }
+
+    z.string().uuid().parse(id);
+
+    return json(
+      await deleteMember(getRuntime().service, request.headers, id, input),
+    );
+  });
+}
 
 export async function POST(
   request: Request,

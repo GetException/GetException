@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Form } from "../forms/Form";
 import { StepUpForm } from "../forms/StepUpForm";
 import { CopyButton } from "../forms/CopyButton";
-import { useProjectMutation } from "./use-project-mutation";
+import { useStepUpMutation } from "../forms/use-step-up-mutation";
 import { dateTime } from "../../lib/format";
 
 export function IngestionKeys({
@@ -18,7 +18,7 @@ export function IngestionKeys({
   const [created, setCreated] = useState<{ id: string; dsn: string } | null>(
     null,
   );
-  const mutation = useProjectMutation();
+  const mutation = useStepUpMutation();
   const router = useRouter();
 
   return (

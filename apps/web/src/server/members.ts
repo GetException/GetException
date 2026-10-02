@@ -22,6 +22,66 @@ const memberInput = z
     teamIds: ids,
   })
   .strict();
+const deleteMemberInput = z
+  .object({ email: z.string().trim().toLowerCase().email().max(254) })
+  .strict();
+
+export async function deleteMember(
+  service: AuthService,
+  headers: Headers,
+  id: string,
+  input: unknown,
+) {
+  const data = deleteMemberInput.parse(input);
+
+  return ownerTransaction(service, headers, async (tx, current) => {
+    const member = await tx.member.findFirst({
+      where: { id, organizationId: current.member.organizationId },
+      include: { user: true },
+    });
+
+    if (!member) {
+      throw new AuthError(404);
+    }
+
+    if (member.userId === current.user.id) {
+      throw new AuthError(409, "member_self_delete");
+    }
+
+    if (data.email !== member.user.email) {
+      throw new AuthError(400, "member_confirmation");
+    }
+
+    // Keep a usable Owner even when deleting another Owner or racing a role change.
+    if (
+      !(await tx.member.count({
+        where: {
+          organizationId: current.member.organizationId,
+          userId: { not: member.userId },
+          role: "owner",
+          active: true,
+          user: { disabled: false, twoFactorEnabled: true },
+        },
+      }))
+    ) {
+      throw new AuthError(409, "last_owner");
+    }
+
+    // Invitations reference their creator. Remove both directions and their
+    // pending enrollments so no previously issued link can recreate access.
+    await tx.invitation.deleteMany({
+      where: {
+        organizationId: current.member.organizationId,
+        OR: [{ email: member.user.email }, { inviterId: member.userId }],
+      },
+    });
+    // Foreign keys cascade to credentials, sessions, membership and team links.
+    await tx.user.delete({ where: { id: member.userId } });
+    await service.audit(tx, "member_delete", true, current.user.id);
+
+    return { ok: true };
+  });
+}
 
 export async function saveTeam(
   service: AuthService,

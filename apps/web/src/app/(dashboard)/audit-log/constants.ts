@@ -17,6 +17,7 @@ export const actions: Record<string, string> = {
   team_create: "Team created",
   team_update: "Team updated",
   member_update: "Member access updated",
+  member_delete: "Member account deleted",
   invitation_create: "Invitation created",
   invitation_resend: "Invitation resent · legacy",
   invitation_reissue: "Invitation link reissued",

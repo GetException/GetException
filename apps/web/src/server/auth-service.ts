@@ -50,6 +50,7 @@ export class AuthService {
       | "source_map_policy_update"
       | "team_update"
       | "member_update"
+      | "member_delete"
       | "invitation_create"
       | "invitation_reissue"
       | "invitation_revoke"

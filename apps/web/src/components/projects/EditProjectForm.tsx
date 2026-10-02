@@ -6,7 +6,7 @@ import { Form } from "../forms/Form";
 import { StepUpForm } from "../forms/StepUpForm";
 import { ProjectFields, type ProjectValues } from "./ProjectFields";
 import { projectFormValues } from "./project-form-values";
-import { useProjectMutation } from "./use-project-mutation";
+import { useStepUpMutation } from "../forms/use-step-up-mutation";
 
 export function EditProjectForm({
   project,
@@ -14,7 +14,7 @@ export function EditProjectForm({
   project: ProjectValues & { id: string };
 }) {
   const router = useRouter();
-  const mutation = useProjectMutation();
+  const mutation = useStepUpMutation();
   const [saved, setSaved] = useState(false);
 
   return (

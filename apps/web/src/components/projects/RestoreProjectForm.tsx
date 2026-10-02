@@ -3,11 +3,11 @@
 import { useRouter } from "next/navigation";
 import { Form } from "../forms/Form";
 import { StepUpForm } from "../forms/StepUpForm";
-import { useProjectMutation } from "./use-project-mutation";
+import { useStepUpMutation } from "../forms/use-step-up-mutation";
 
 export function RestoreProjectForm({ id }: { id: string }) {
   const router = useRouter();
-  const mutation = useProjectMutation();
+  const mutation = useStepUpMutation();
 
   return (
     <>
