@@ -3,17 +3,20 @@ import { renderToStaticMarkup } from "react-dom/server";
 import IssuesPage from "../../apps/web/src/app/(dashboard)/issues/page";
 import IssuePage from "../../apps/web/src/app/(dashboard)/issues/[id]/page";
 
-const { db, latestIssueEvents, issueTrend } = vi.hoisted(() => ({
-  db: {
-    project: { findMany: vi.fn() },
-    issue: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
-    issueActivity: { findMany: vi.fn() },
-    errorEvent: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
-    release: { findMany: vi.fn(), findUnique: vi.fn() },
-  },
-  latestIssueEvents: vi.fn(),
-  issueTrend: vi.fn(),
-}));
+const { db, latestIssueEvents, eventActivity, eventBreakdowns } = vi.hoisted(
+  () => ({
+    db: {
+      project: { findMany: vi.fn() },
+      issue: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
+      issueActivity: { findMany: vi.fn() },
+      errorEvent: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
+      release: { findMany: vi.fn(), findUnique: vi.fn() },
+    },
+    latestIssueEvents: vi.fn(),
+    eventActivity: vi.fn(),
+    eventBreakdowns: vi.fn(),
+  }),
+);
 
 vi.mock("../../apps/web/src/server/runtime", () => ({
   getRuntime: () => ({ db }),
@@ -25,7 +28,10 @@ vi.mock("../../apps/web/src/server/dashboard", () => ({
 }));
 vi.mock("../../apps/web/src/server/issues/insights", () => ({
   latestIssueEvents,
-  issueTrend,
+}));
+vi.mock("../../apps/web/src/server/analytics/activity", () => ({
+  eventActivity,
+  eventBreakdowns,
 }));
 
 const date = new Date("2026-09-21T17:00:00Z");
@@ -94,7 +100,14 @@ beforeEach(() => {
       symbolicationState: "missing",
     },
   ]);
-  issueTrend.mockResolvedValue([{ date: "2026-09-21", count: 2 }]);
+  eventActivity.mockResolvedValue({
+    buckets: [],
+    total: 0,
+    unhandled: 0,
+    mapped: 0,
+    fatal: 0,
+  });
+  eventBreakdowns.mockResolvedValue({ browsers: [], releases: [] });
 });
 
 it("shows compact build context below the issue title and opens the retained event", async () => {
@@ -133,6 +146,62 @@ it("shows the missing retained event note below the issue title", async () => {
   expect(html).not.toContain("issue-build-context");
 });
 
+it("sorts the issue query before pagination and replaces the Sort dropdown with accessible headers", async () => {
+  const html = renderToStaticMarkup(
+    await IssuesPage({
+      searchParams: Promise.resolve({
+        sort: "events",
+        direction: "asc",
+        page: "2",
+        environment: "staging",
+      }),
+    }),
+  );
+
+  expect(db.issue.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      orderBy: [{ eventCount: "asc" }, { id: "asc" }],
+      skip: 25,
+      take: 25,
+    }),
+  );
+  expect(html).not.toContain('aria-label="Sort"');
+  expect(html).toContain('aria-sort="ascending"');
+  expect(html).toContain('name="sort" value="events"');
+  expect(html).toContain('name="direction" value="asc"');
+});
+
+it("sorts the event table without changing the selected event or chronological navigation", async () => {
+  await IssuePage({
+    params: Promise.resolve({ id: issue.id }),
+    searchParams: Promise.resolve({
+      event: selected.eventId,
+      sort: "release",
+      direction: "asc",
+      page: "2",
+    }),
+  });
+
+  expect(db.errorEvent.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      orderBy: [{ release: { sort: "asc", nulls: "last" } }, { id: "asc" }],
+      skip: 20,
+      take: 20,
+    }),
+  );
+  expect(db.errorEvent.findFirst).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({
+      where: {
+        projectId: issue.projectId,
+        issueId: issue.id,
+        eventId: selected.eventId,
+      },
+      orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
+    }),
+  );
+});
+
 it("shows selected-event MR build context and recent activity on the issue", async () => {
   const html = renderToStaticMarkup(
     await IssuePage({
@@ -142,10 +211,9 @@ it("shows selected-event MR build context and recent activity on the issue", asy
   );
 
   expect(html).toContain("MR !554");
-  expect(html).toContain("Recent activity");
-  expect(html).toContain(
-    "Retained events · all environments · UTC · last 7 days",
-  );
+  expect(html).toContain("Issue activity");
+  expect(html).toContain("Last 7 days");
+  expect(html).toContain("Browsers and releases");
   expect(html).toContain(selected.eventId);
   expect(db.release.findUnique).toHaveBeenCalledWith(
     expect.objectContaining({ select: { id: true, deployments: true } }),

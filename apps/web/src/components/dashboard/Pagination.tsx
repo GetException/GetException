@@ -9,12 +9,14 @@ export function Pagination({
   page,
   total,
   size = PAGE_SIZE,
+  pageParam = "page",
 }: {
   path: string;
   values: Record<string, string | number | undefined>;
   page: number;
   total: number;
   size?: number;
+  pageParam?: string;
 }) {
   const pages = Math.max(1, Math.min(MAX_PAGE, Math.ceil(total / size)));
 
@@ -27,7 +29,7 @@ export function Pagination({
         {page > 1 ? (
           <Link
             className="button"
-            href={linkTo(path, { ...values, page: page - 1 })}
+            href={linkTo(path, { ...values, [pageParam]: page - 1 })}
           >
             ← Previous
           </Link>
@@ -39,7 +41,7 @@ export function Pagination({
         {page < pages ? (
           <Link
             className="button"
-            href={linkTo(path, { ...values, page: page + 1 })}
+            href={linkTo(path, { ...values, [pageParam]: page + 1 })}
           >
             Next →
           </Link>

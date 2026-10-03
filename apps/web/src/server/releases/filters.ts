@@ -1,6 +1,7 @@
 import type { Prisma } from "@getexception/db";
 import { projectScope, type AccessMember } from "../access";
 import { pageNumber, textParam, type Search } from "../../lib/search-params";
+import { tableSort } from "../../lib/table-sort";
 import {
   reviewLabel,
   ENVIRONMENT_LABELS,
@@ -11,6 +12,7 @@ export function releaseFilters(search: Search) {
   const review = textParam(search.review, 40);
 
   return {
+    ...tableSort(search, "releases"),
     project: textParam(search.project, 64),
     q: textParam(search.q),
     environment: Object.hasOwn(ENVIRONMENT_LABELS, environment)

@@ -7,33 +7,40 @@ import { Heading } from "../../../components/dashboard/Heading";
 import { Pagination } from "../../../components/dashboard/Pagination";
 import { dateTime } from "../../../lib/format";
 import { pageNumber, textParam, type Search } from "../../../lib/search-params";
+import { tableSort } from "../../../lib/table-sort";
+import { auditPageIds } from "../../../server/audit/list";
+import { inPageOrder } from "../../../server/table-order";
+import { SortableTableHead } from "../../../components/dashboard/SortableTableHead";
+import { SortFields } from "../../../components/dashboard/SortFields";
 
 export default async function AuditLogPage({
   searchParams,
 }: {
   searchParams: Promise<Search>;
 }) {
-  await dashboardOwner();
+  const { member } = await dashboardOwner();
   const { db } = getRuntime();
   const search = await searchParams;
   const page = pageNumber(search.page);
   const action = textParam(search.action);
   const outcome = textParam(search.outcome);
+  const sorting = tableSort(search, "audit");
+  const values = { action, outcome, ...sorting };
   const where = {
     ...(Object.hasOwn(actions, action) ? { action } : {}),
     ...(["success", "failure"].includes(outcome)
       ? { success: outcome === "success" }
       : {}),
   };
-  const [entries, total] = await Promise.all([
+  const ids = await auditPageIds(db, member, action, outcome, sorting, page);
+  const [rows, total] = await Promise.all([
     db.auditLog.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      skip: (page - 1) * PAGE_SIZE,
+      where: { ...where, id: { in: ids.map(({ id }) => id) } },
       take: PAGE_SIZE,
     }),
     db.auditLog.count({ where }),
   ]);
+  const entries = inPageOrder(rows, ids);
   const users = await db.user.findMany({
     where: {
       id: {
@@ -59,6 +66,7 @@ export default async function AuditLogPage({
           className="filters"
           method="get"
         >
+          <SortFields sorting={sorting} />
           <label className="filter-field">
             Action
             <select
@@ -87,14 +95,12 @@ export default async function AuditLogPage({
         {entries.length ? (
           <div className="table-scroll">
             <table>
-              <thead>
-                <tr>
-                  <th>Time · UTC</th>
-                  <th>Action</th>
-                  <th>Actor</th>
-                  <th>Result</th>
-                </tr>
-              </thead>
+              <SortableTableHead
+                table="audit"
+                sorting={sorting}
+                path="/audit-log"
+                values={values}
+              />
               <tbody>
                 {entries.map((entry) => (
                   <tr key={entry.id}>
@@ -125,7 +131,7 @@ export default async function AuditLogPage({
         )}
         <Pagination
           path="/audit-log"
-          values={{ action, outcome }}
+          values={values}
           page={page}
           total={total}
         />

@@ -5,31 +5,39 @@ import { getRuntime } from "../../../../server/runtime";
 import { dashboardUser } from "../../../../server/dashboard";
 import { Stat } from "../../../../components/dashboard/Stat";
 import { dateTime, number } from "../../../../lib/format";
-import { linkTo } from "../../../../lib/search-params";
+import { linkTo, pageNumber, type Search } from "../../../../lib/search-params";
+import { tableSort } from "../../../../lib/table-sort";
+import { PAGE_SIZE } from "../../../../lib/pagination";
+import { ingestionKeyPageIds } from "../../../../server/projects/list";
+import { inPageOrder } from "../../../../server/table-order";
+import { SortableTableHead } from "../../../../components/dashboard/SortableTableHead";
+import { Pagination } from "../../../../components/dashboard/Pagination";
 
 export default async function ProjectPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Search>;
 }) {
   const { member } = await dashboardUser();
   const { id } = await params;
   const { db } = getRuntime();
+  const search = await searchParams;
+  const sorting = tableSort(search, "keys");
+  const page = pageNumber(search.page);
+  const now = new Date();
   const project = await db.project.findFirst({
     where: { id, ...projectScope(member) },
     include: {
       origins: true,
       teams: { include: { team: { select: { name: true } } } },
-      keys: {
-        select: { id: true, createdAt: true, revokedAt: true, expiresAt: true },
-        orderBy: { createdAt: "desc" },
-        take: 20,
-      },
       _count: {
         select: {
           issues: { where: { status: "open", eventCount: { gt: 0 } } },
           events: true,
           releases: true,
+          keys: true,
         },
       },
     },
@@ -38,6 +46,16 @@ export default async function ProjectPage({
   if (!project) {
     notFound();
   }
+
+  const ids = await ingestionKeyPageIds(db, project.id, sorting, page, now);
+  const keys = inPageOrder(
+    await db.projectIngestionKey.findMany({
+      where: { projectId: project.id, id: { in: ids.map(({ id }) => id) } },
+      select: { id: true, createdAt: true, revokedAt: true, expiresAt: true },
+      take: PAGE_SIZE,
+    }),
+    ids,
+  );
 
   return (
     <div className="page">
@@ -150,15 +168,14 @@ export default async function ProjectPage({
             </div>
             <div className="table-scroll">
               <table>
-                <thead>
-                  <tr>
-                    <th>Created</th>
-                    <th>Status</th>
-                    <th>Expires</th>
-                  </tr>
-                </thead>
+                <SortableTableHead
+                  table="keys"
+                  sorting={sorting}
+                  path={`/projects/${project.id}`}
+                  values={sorting}
+                />
                 <tbody>
-                  {project.keys.map((key) => (
+                  {keys.map((key) => (
                     <tr key={key.id}>
                       <td>{dateTime(key.createdAt)}</td>
                       <td>
@@ -166,7 +183,7 @@ export default async function ProjectPage({
                           {key.revokedAt
                             ? "Revoked"
                             : key.expiresAt &&
-                                key.expiresAt.getTime() < Date.now()
+                                key.expiresAt.getTime() < now.getTime()
                               ? "Expired"
                               : "Active"}
                         </span>
@@ -181,6 +198,14 @@ export default async function ProjectPage({
                 </tbody>
               </table>
             </div>
+            {project._count.keys > PAGE_SIZE && (
+              <Pagination
+                path={`/projects/${project.id}`}
+                values={sorting}
+                page={page}
+                total={project._count.keys}
+              />
+            )}
             <p className="content-note">
               Your DSN is shown once when the project is created. Saved key
               values cannot be revealed again.

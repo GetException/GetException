@@ -77,11 +77,11 @@ describe("dashboard query boundaries", () => {
       },
       status: "open",
       regression: true,
-      lastSeen: { gte: new Date(0) },
       events: {
         some: {
           environment: "production",
           release: "checkout@0123456789abcdef",
+          receivedAt: { gte: new Date(0), lt: new Date(7 * 86400_000) },
         },
       },
     });

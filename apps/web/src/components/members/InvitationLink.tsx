@@ -1,14 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { CopyButton } from "../forms/CopyButton";
 
 export function InvitationLink({
   token,
   expiresAt,
+  children,
 }: {
   token: string;
   expiresAt: string;
+  children?: ReactNode;
 }) {
   const [link, setLink] = useState("");
 
@@ -28,7 +31,10 @@ export function InvitationLink({
       <code className="secret" data-private data-testid="invitation-link">
         {link || "Preparing link…"}
       </code>
-      <CopyButton value={link} label="Copy invitation link" />
+      <div className="actions">
+        <CopyButton value={link} label="Copy invitation link" />
+        {children}
+      </div>
     </div>
   );
 }

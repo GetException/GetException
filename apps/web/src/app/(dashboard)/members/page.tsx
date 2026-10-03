@@ -9,6 +9,11 @@ import { Heading } from "../../../components/dashboard/Heading";
 import { Pagination } from "../../../components/dashboard/Pagination";
 import { dateTime } from "../../../lib/format";
 import { pageNumber, textParam, type Search } from "../../../lib/search-params";
+import { tableSort, sortValues } from "../../../lib/table-sort";
+import { memberPageIds, invitationPageIds } from "../../../server/members/list";
+import { inPageOrder } from "../../../server/table-order";
+import { SortableTableHead } from "../../../components/dashboard/SortableTableHead";
+import { SortFields } from "../../../components/dashboard/SortFields";
 
 export default async function MembersPage({
   searchParams,
@@ -20,6 +25,17 @@ export default async function MembersPage({
   const search = await searchParams;
   const q = textParam(search.q);
   const page = pageNumber(search.page);
+  const sorting = tableSort(search, "members");
+  const invitationSorting = tableSort(search, "invitations", "invite");
+  const invitePage = pageNumber(search.invitePage);
+  const now = new Date();
+  const values = {
+    q,
+    page,
+    ...sorting,
+    invitePage,
+    ...sortValues(invitationSorting, "invite"),
+  };
   const where = {
     organizationId: member.organizationId,
     ...(q
@@ -33,11 +49,13 @@ export default async function MembersPage({
         }
       : {}),
   };
-  const [members, total] = await Promise.all([
+  const [ids, invitationIds] = await Promise.all([
+    memberPageIds(db, member, q, sorting, page),
+    invitationPageIds(db, member, invitationSorting, invitePage, now),
+  ]);
+  const [rows, total] = await Promise.all([
     db.member.findMany({
-      where,
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      skip: (page - 1) * PAGE_SIZE,
+      where: { ...where, id: { in: ids.map(({ id }) => id) } },
       take: PAGE_SIZE,
       select: {
         id: true,
@@ -52,22 +70,28 @@ export default async function MembersPage({
             twoFactorEnabled: true,
           },
         },
-        teams: { select: { team: { select: { name: true } } } },
+        teams: {
+          orderBy: { team: { name: "asc" } },
+          select: { team: { select: { name: true } } },
+        },
       },
     }),
     db.member.count({ where }),
   ]);
 
-  const [teams, invitations] = await Promise.all([
+  const members = inPageOrder(rows, ids);
+  const [teams, invitationRows, invitationTotal] = await Promise.all([
     db.team.findMany({
       where: { organizationId: member.organizationId },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
     db.invitation.findMany({
-      where: { organizationId: member.organizationId },
-      orderBy: { createdAt: "desc" },
-      take: 100,
+      where: {
+        organizationId: member.organizationId,
+        id: { in: invitationIds.map(({ id }) => id) },
+      },
+      take: PAGE_SIZE,
       select: {
         id: true,
         email: true,
@@ -76,7 +100,9 @@ export default async function MembersPage({
         expiresAt: true,
       },
     }),
+    db.invitation.count({ where: { organizationId: member.organizationId } }),
   ]);
+  const invitations = inPageOrder(invitationRows, invitationIds);
 
   return (
     <div className="page">
@@ -86,6 +112,9 @@ export default async function MembersPage({
       />
       <section className="panel">
         <form key={q} className="filters" method="get">
+          <SortFields sorting={sorting} />
+          <SortFields sorting={invitationSorting} prefix="invite" />
+          <input type="hidden" name="invitePage" value={invitePage} />
           <label className="filter-field search-field">
             Search members
             <input
@@ -100,16 +129,12 @@ export default async function MembersPage({
         {members.length ? (
           <div className="table-scroll">
             <table>
-              <thead>
-                <tr>
-                  <th>Member</th>
-                  <th>Role</th>
-                  <th>Teams</th>
-                  <th>Two-factor auth</th>
-                  <th>Status</th>
-                  <th>Joined</th>
-                </tr>
-              </thead>
+              <SortableTableHead
+                table="members"
+                sorting={sorting}
+                path="/members"
+                values={values}
+              />
               <tbody>
                 {members.map((entry) => (
                   <tr key={entry.id}>
@@ -161,9 +186,16 @@ export default async function MembersPage({
         ) : (
           <Empty title="No matching members">Try another name or email.</Empty>
         )}
-        <Pagination path="/members" values={{ q }} page={page} total={total} />
+        <Pagination path="/members" values={values} page={page} total={total} />
       </section>
-      <InvitationList invitations={invitations} />
+      <InvitationList
+        invitations={invitations}
+        sorting={invitationSorting}
+        values={values}
+        page={invitePage}
+        total={invitationTotal}
+        now={now}
+      />
       <section className="panel form-panel" id="invite">
         <h2>Invite a teammate</h2>
         <p className="muted security-intro">

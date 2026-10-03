@@ -1,6 +1,8 @@
 import { projectScope, type AccessMember } from "./access";
 import type { Prisma } from "@getexception/db";
 import { pageNumber, textParam, type Search } from "../lib/search-params";
+import { tableSort } from "../lib/table-sort";
+import { activityDateRange } from "../lib/activity";
 
 export function issueFilters(search: Search) {
   return {
@@ -22,9 +24,7 @@ export function issueFilters(search: Search) {
     period: ["24h", "7d", "30d"].includes(textParam(search.period))
       ? textParam(search.period)
       : "all",
-    sort: ["events", "first"].includes(textParam(search.sort))
-      ? textParam(search.sort)
-      : "recent",
+    ...tableSort(search, "issues"),
     release: textParam(search.release),
     page: pageNumber(search.page),
   };
@@ -35,11 +35,13 @@ export function issueWhere(
   filters: ReturnType<typeof issueFilters>,
   now = Date.now(),
 ): Prisma.IssueWhereInput {
+  const range = activityDateRange(filters.period, new Date(now));
   const eventScope = {
     ...(filters.environment !== "all"
       ? { environment: filters.environment }
       : {}),
     ...(filters.release ? { release: filters.release } : {}),
+    ...(range ? { receivedAt: range } : {}),
   };
 
   return {
@@ -61,16 +63,6 @@ export function issueWhere(
       : filters.status !== "all"
         ? { status: filters.status }
         : {}),
-    ...(filters.period !== "all"
-      ? {
-          lastSeen: {
-            gte: new Date(
-              now -
-                { "24h": 1, "7d": 7, "30d": 30 }[filters.period]! * 86400_000,
-            ),
-          },
-        }
-      : {}),
     events: {
       some: {
         ...eventScope,

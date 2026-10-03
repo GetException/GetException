@@ -8,6 +8,11 @@ import { Heading } from "../../../components/dashboard/Heading";
 import { Pagination } from "../../../components/dashboard/Pagination";
 import { dateTime, number } from "../../../lib/format";
 import { pageNumber, textParam, type Search } from "../../../lib/search-params";
+import { tableSort } from "../../../lib/table-sort";
+import { projectPageIds } from "../../../server/projects/list";
+import { inPageOrder } from "../../../server/table-order";
+import { SortableTableHead } from "../../../components/dashboard/SortableTableHead";
+import { SortFields } from "../../../components/dashboard/SortFields";
 
 export default async function ProjectsPage({
   searchParams,
@@ -17,6 +22,8 @@ export default async function ProjectsPage({
   const search = await searchParams;
   const q = textParam(search.q);
   const page = pageNumber(search.page);
+  const sorting = tableSort(search, "projects");
+  const values = { q, ...sorting };
   const { member } = await dashboardUser();
   const { db } = getRuntime();
   const where = {
@@ -30,14 +37,16 @@ export default async function ProjectsPage({
         }
       : {}),
   };
-  const [projects, total] = await Promise.all([
+  const ids = await projectPageIds(db, member, q, sorting, page);
+  const [rows, total] = await Promise.all([
     db.project.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      skip: (page - 1) * PAGE_SIZE,
+      where: { ...where, id: { in: ids.map(({ id }) => id) } },
       take: PAGE_SIZE,
       include: {
-        teams: { include: { team: { select: { name: true } } } },
+        teams: {
+          orderBy: { team: { name: "asc" } },
+          include: { team: { select: { name: true } } },
+        },
         _count: {
           select: {
             issues: { where: { status: "open", eventCount: { gt: 0 } } },
@@ -48,6 +57,7 @@ export default async function ProjectsPage({
     }),
     db.project.count({ where }),
   ]);
+  const projects = inPageOrder(rows, ids);
 
   return (
     <div className="page">
@@ -69,6 +79,7 @@ export default async function ProjectsPage({
       />
       <section className="panel">
         <form key={q} method="get" className="filters">
+          <SortFields sorting={sorting} />
           <label className="filter-field search-field">
             Search projects
             <input
@@ -83,16 +94,12 @@ export default async function ProjectsPage({
         {projects.length ? (
           <div className="table-scroll">
             <table>
-              <thead>
-                <tr>
-                  <th>Project</th>
-                  <th>Teams</th>
-                  <th>Status</th>
-                  <th className="numeric">Open issues</th>
-                  <th className="numeric">Retained events</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
+              <SortableTableHead
+                table="projects"
+                sorting={sorting}
+                path="/projects"
+                values={values}
+              />
               <tbody>
                 {projects.map((p) => (
                   <tr key={p.id}>
@@ -148,7 +155,12 @@ export default async function ProjectsPage({
               : "Ask an Owner to add you to a team with project access."}
           </Empty>
         )}
-        <Pagination path="/projects" values={{ q }} page={page} total={total} />
+        <Pagination
+          path="/projects"
+          values={values}
+          page={page}
+          total={total}
+        />
       </section>
     </div>
   );

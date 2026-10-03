@@ -1,7 +1,5 @@
 import { dashboardUser } from "../../server/dashboard";
-import { getRuntime } from "../../server/runtime";
 import { SignOut } from "../../components/forms/SignOut";
-import { Location } from "../../components/navigation/Location";
 import { Navigation } from "../../components/navigation/Navigation";
 import { Brand } from "../../components/branding/Brand";
 
@@ -13,10 +11,6 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const { user, member } = await dashboardUser();
-  const workspace = await getRuntime().db.organization.findUniqueOrThrow({
-    where: { id: member.organizationId },
-    select: { name: true },
-  });
 
   return (
     <div className="dashboard-shell">
@@ -25,10 +19,6 @@ export default async function DashboardLayout({
       </a>
       <aside className="sidebar">
         <Brand href="/" />
-        <div className="workspace-switch">
-          <span className="avatar">{workspace.name.slice(0, 1)}</span>
-          <div>{workspace.name}</div>
-        </div>
         <Navigation role={member.role} />
         <div className="sidebar-footer">
           <div className="profile">
@@ -43,9 +33,6 @@ export default async function DashboardLayout({
         </div>
       </aside>
       <main className="main-content" id="main">
-        <header className="topbar">
-          <Location />
-        </header>
         {children}
       </main>
     </div>

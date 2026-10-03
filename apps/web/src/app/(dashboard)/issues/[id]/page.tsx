@@ -24,8 +24,21 @@ import { StackTrace } from "../../../../components/issues/StackTrace";
 import { IssueActivity } from "../../../../components/issues/IssueActivity";
 import { EventDiagnostics } from "../../../../components/issues/EventDiagnostics";
 import { IssueBuildContext } from "../../../../components/issues/IssueBuildContext";
-import { IssueTrend } from "../../../../components/issues/IssueTrend";
-import { issueTrend } from "../../../../server/issues/insights";
+import { ActivityFilters } from "../../../../components/analytics/ActivityFilters";
+import { ActivityChart } from "../../../../components/analytics/ActivityChart";
+import { EventBreakdown } from "../../../../components/analytics/EventBreakdown";
+import {
+  eventActivity,
+  eventBreakdowns,
+} from "../../../../server/analytics/activity";
+import {
+  activityFilters,
+  activityWindow,
+  ACTIVITY_PERIODS,
+} from "../../../../lib/activity";
+import { tableSort } from "../../../../lib/table-sort";
+import { eventOrder } from "../../../../server/issues/sorting";
+import { SortableTableHead } from "../../../../components/dashboard/SortableTableHead";
 
 export default async function IssuePage({
   params,
@@ -38,6 +51,7 @@ export default async function IssuePage({
   const search = await searchParams;
   const page = pageNumber(search.page);
   const eventId = textParam(search.event, 32);
+  const sorting = tableSort(search, "events");
   const { member } = await dashboardUser();
   const { db } = getRuntime();
   const issue = await db.issue.findFirst({
@@ -58,15 +72,25 @@ export default async function IssuePage({
     take: 30,
   });
   const scope = { issueId: issue.id, projectId: issue.projectId };
+  const analyticsFilters = {
+    ...activityFilters(search, "activity", "7d"),
+    project: issue.projectId,
+  };
+  const window = activityWindow(analyticsFilters.period);
+  const activityValues = {
+    activityPeriod: analyticsFilters.period,
+    activityEnvironment: analyticsFilters.environment,
+  };
+  const breakdownCaption = `${ACTIVITY_PERIODS[analyticsFilters.period].label} · ${analyticsFilters.environment === "all" ? "all environments" : analyticsFilters.environment}`;
   const ordering = [{ receivedAt: "desc" as const }, { id: "desc" as const }];
-  const [selected, events, retained, trend] = await Promise.all([
+  const [selected, events, retained, activity, breakdowns] = await Promise.all([
     db.errorEvent.findFirst({
       where: { ...scope, ...(eventId ? { eventId } : {}) },
       orderBy: ordering,
     }),
     db.errorEvent.findMany({
       where: scope,
-      orderBy: ordering,
+      orderBy: eventOrder(sorting),
       skip: (page - 1) * EVENT_PAGE_SIZE,
       take: EVENT_PAGE_SIZE,
       select: {
@@ -80,7 +104,8 @@ export default async function IssuePage({
       },
     }),
     db.errorEvent.count({ where: scope }),
-    issueTrend(db, issue.projectId, issue.id),
+    eventActivity(db, member, analyticsFilters, window, issue.id),
+    eventBreakdowns(db, member, analyticsFilters, window, issue.id),
   ]);
 
   if (eventId && !selected) {
@@ -184,6 +209,8 @@ export default async function IssuePage({
               className="button"
               href={linkTo(`/issues/${issue.id}`, {
                 event: older.eventId,
+                ...sorting,
+                ...activityValues,
                 page,
               })}
             >
@@ -199,6 +226,8 @@ export default async function IssuePage({
               className="button"
               href={linkTo(`/issues/${issue.id}`, {
                 event: newer.eventId,
+                ...sorting,
+                ...activityValues,
                 page,
               })}
             >
@@ -219,7 +248,19 @@ export default async function IssuePage({
           )}
         </div>
       </div>
-      <IssueTrend days={trend} />
+      <section className="panel">
+        <ActivityFilters
+          filters={analyticsFilters}
+          prefix="activity"
+          preserve={{ ...sorting, event: selected?.eventId, page }}
+        />
+      </section>
+      <ActivityChart
+        key={JSON.stringify(analyticsFilters)}
+        data={activity}
+        period={analyticsFilters.period}
+        title="Issue activity"
+      />
       <div className="issue-columns">
         <div className="issue-stack-column">
           <StackTrace
@@ -322,6 +363,38 @@ export default async function IssuePage({
           )}
         </aside>
       </div>
+      <details className="panel activity-distributions">
+        <summary>
+          Browsers and releases{" "}
+          <span className="muted small">{breakdownCaption}</span>
+        </summary>
+        <div className="overview-columns">
+          <EventBreakdown
+            title="Browsers"
+            total={activity.total}
+            caption={breakdownCaption}
+            rows={breakdowns.browsers.map((row) => ({
+              label: row.label ?? "Not reported",
+              count: row.count,
+            }))}
+          />
+          <EventBreakdown
+            title="Releases"
+            total={activity.total}
+            caption={breakdownCaption}
+            rows={breakdowns.releases.map((row) => ({
+              label: row.label ? releaseLabel(row.label) : "Not reported",
+              title: row.label ?? undefined,
+              count: row.count,
+              href: row.releaseId
+                ? linkTo(`/releases/${row.releaseId}`, {
+                    environment: analyticsFilters.environment,
+                  })
+                : undefined,
+            }))}
+          />
+        </div>
+      </details>
       <IssueActivity issueId={issue.id} activities={activities} />
       <EventTabs
         breadcrumbs={breadcrumbs.success ? breadcrumbs.data : []}
@@ -329,16 +402,17 @@ export default async function IssuePage({
           <>
             <div className="table-scroll">
               <table className="events-table">
-                <thead>
-                  <tr>
-                    <th>Time · UTC</th>
-                    <th>Event</th>
-                    <th>Release</th>
-                    <th>Environment</th>
-                    <th>Level</th>
-                    <th>Handling</th>
-                  </tr>
-                </thead>
+                <SortableTableHead
+                  table="events"
+                  sorting={sorting}
+                  path={`/issues/${issue.id}`}
+                  values={{
+                    ...sorting,
+                    ...activityValues,
+                    event: selected?.eventId,
+                    page,
+                  }}
+                />
                 <tbody>
                   {events.map((event) => (
                     <tr
@@ -350,6 +424,8 @@ export default async function IssuePage({
                           className="text-link"
                           href={linkTo(`/issues/${issue.id}`, {
                             event: event.eventId,
+                            ...sorting,
+                            ...activityValues,
                             page,
                           })}
                         >
@@ -380,7 +456,11 @@ export default async function IssuePage({
             )}
             <Pagination
               path={`/issues/${issue.id}`}
-              values={{ event: selected?.eventId }}
+              values={{
+                event: selected?.eventId,
+                ...sorting,
+                ...activityValues,
+              }}
               page={page}
               total={retained}
               size={EVENT_PAGE_SIZE}

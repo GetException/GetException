@@ -1,9 +1,22 @@
 import { dateTime } from "../../lib/format";
 import { InvitationActions } from "./InvitationActions";
+import { SortableTableHead } from "../dashboard/SortableTableHead";
+import { Pagination } from "../dashboard/Pagination";
+import type { TableSort } from "../../lib/table-sort";
 
 export function InvitationList({
   invitations,
+  sorting,
+  values,
+  page,
+  total,
+  now,
 }: {
+  sorting: TableSort;
+  values: Record<string, string | number | undefined>;
+  page: number;
+  total: number;
+  now: Date;
   invitations: {
     id: string;
     email: string;
@@ -13,28 +26,27 @@ export function InvitationList({
   }[];
 }) {
   return (
-    <section className="panel">
+    <section className="panel" id="invitations">
       <div className="section-heading">
         <h2>Invitations</h2>
-        <span className="muted small">Latest 100</span>
       </div>
       {invitations.length ? (
         <div className="table-scroll">
           <table>
-            <thead>
-              <tr>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Expires · UTC</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
+            <SortableTableHead
+              table="invitations"
+              sorting={sorting}
+              path="/members"
+              values={values}
+              prefix="invite"
+            >
+              <th scope="col">Actions</th>
+            </SortableTableHead>
             <tbody>
               {invitations.map((invitation) => {
                 const expired =
                   invitation.status === "pending" &&
-                  invitation.expiresAt.getTime() <= Date.now();
+                  invitation.expiresAt.getTime() <= now.getTime();
 
                 return (
                   <tr key={invitation.id}>
@@ -61,6 +73,15 @@ export function InvitationList({
         <p className="content-note">
           No invitations yet. Create a personal link using the form below.
         </p>
+      )}
+      {total > 0 && (
+        <Pagination
+          path="/members"
+          values={values}
+          page={page}
+          total={total}
+          pageParam="invitePage"
+        />
       )}
     </section>
   );

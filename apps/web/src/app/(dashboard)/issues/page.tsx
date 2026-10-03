@@ -1,7 +1,9 @@
 import { projectScope } from "../../../server/access";
 import { PAGE_SIZE } from "../../../lib/pagination";
 import Link from "next/link";
-import type { Prisma } from "@getexception/db";
+import { issueOrder } from "../../../server/issues/sorting";
+import { SortableTableHead } from "../../../components/dashboard/SortableTableHead";
+import { SortFields } from "../../../components/dashboard/SortFields";
 import { getRuntime } from "../../../server/runtime";
 import { dashboardUser } from "../../../server/dashboard";
 import { dateTime, number } from "../../../lib/format";
@@ -24,12 +26,7 @@ export default async function IssuesPage({
   const { db } = getRuntime();
   const filters = issueFilters(await searchParams);
   const where = issueWhere(member, filters);
-  const orderBy: Prisma.IssueOrderByWithRelationInput[] =
-    filters.sort === "events"
-      ? [{ eventCount: "desc" }, { id: "desc" }]
-      : filters.sort === "first"
-        ? [{ firstSeen: "desc" }, { id: "desc" }]
-        : [{ lastSeen: "desc" }, { id: "desc" }];
+  const orderBy = issueOrder(filters);
   const [projects, issues, total] = await Promise.all([
     db.project.findMany({
       where: projectScope(member),
@@ -101,6 +98,7 @@ export default async function IssuesPage({
           <span className="muted result-count">{number(total)} issues</span>
         </div>
         <form key={JSON.stringify(filters)} className="filters" method="get">
+          <SortFields sorting={filters} />
           <input type="hidden" name="status" value={filters.status} />
           {filters.release && (
             <input type="hidden" name="release" value={filters.release} />
@@ -153,14 +151,6 @@ export default async function IssuesPage({
               <option value="30d">Last 30 days</option>
             </select>
           </label>
-          <label className="filter-field">
-            Sort
-            <select aria-label="Sort" name="sort" defaultValue={filters.sort}>
-              <option value="recent">Last seen</option>
-              <option value="events">Most events</option>
-              <option value="first">First seen</option>
-            </select>
-          </label>
           <button className="button">Apply filters</button>
         </form>
         {filters.release && (
@@ -181,21 +171,12 @@ export default async function IssuesPage({
         {issues.length ? (
           <div className="table-scroll">
             <table className="issues-table">
-              <thead>
-                <tr>
-                  <th>Issue</th>
-                  <th>Project</th>
-                  <th>Status</th>
-                  <th
-                    className="numeric"
-                    title="Lifetime count across all environments"
-                  >
-                    Total events
-                  </th>
-                  <th>First seen</th>
-                  <th>Last seen</th>
-                </tr>
-              </thead>
+              <SortableTableHead
+                table="issues"
+                sorting={filters}
+                path="/issues"
+                values={filters}
+              />
               <tbody>
                 {issues.map((issue) => {
                   const latest = latestByIssue.get(issue.id);

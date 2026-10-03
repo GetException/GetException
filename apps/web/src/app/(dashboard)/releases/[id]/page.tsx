@@ -7,7 +7,13 @@ import { Empty } from "../../../../components/dashboard/Empty";
 import { Stat } from "../../../../components/dashboard/Stat";
 import { Status } from "../../../../components/dashboard/Status";
 import { dateTime, number, releaseLabel } from "../../../../lib/format";
-import { linkTo, type Search } from "../../../../lib/search-params";
+import { linkTo, pageNumber, type Search } from "../../../../lib/search-params";
+import { PAGE_SIZE } from "../../../../lib/pagination";
+import { tableSort } from "../../../../lib/table-sort";
+import { releaseIssuePageIds } from "../../../../server/releases/list";
+import { inPageOrder } from "../../../../server/table-order";
+import { SortableTableHead } from "../../../../components/dashboard/SortableTableHead";
+import { Pagination } from "../../../../components/dashboard/Pagination";
 import { releaseFilters } from "../../../../server/releases/filters";
 import { ReleaseContext } from "../../../../components/releases/ReleaseContext";
 import {
@@ -22,7 +28,11 @@ export default async function ReleasePage({
   params: Promise<{ id: string }>;
   searchParams: Promise<Search>;
 }) {
-  const { environment } = releaseFilters(await searchParams);
+  const search = await searchParams;
+  const { environment } = releaseFilters(search);
+  const sorting = tableSort(search, "releaseIssues");
+  const page = pageNumber(search.page);
+  const values = { environment, ...sorting };
   const { member } = await dashboardUser();
   const { id } = await params;
   const { db } = getRuntime();
@@ -45,7 +55,15 @@ export default async function ReleasePage({
     release.sourceMapsVersion,
   );
   const locations = releaseEnvironments(release.deployments);
-  const [events, issueCount, issues, mappedEvents] = await Promise.all([
+  const ids = await releaseIssuePageIds(
+    db,
+    release.projectId,
+    release.name,
+    environment,
+    sorting,
+    page,
+  );
+  const [events, issueCount, rows, mappedEvents] = await Promise.all([
     db.errorEvent.aggregate({
       where: scope,
       _count: { _all: true },
@@ -60,11 +78,11 @@ export default async function ReleasePage({
     }),
     db.issue.findMany({
       where: {
+        id: { in: ids.map(({ id }) => id) },
         projectId: release.projectId,
         events: { some: eventScope },
       },
-      orderBy: { lastSeen: "desc" },
-      take: 10,
+      take: PAGE_SIZE,
       include: {
         _count: { select: { events: { where: eventScope } } },
         events: {
@@ -79,6 +97,7 @@ export default async function ReleasePage({
       where: { ...scope, symbolicationState: { in: ["complete", "partial"] } },
     }),
   ]);
+  const issues = inPageOrder(rows, ids);
   const issuesLink = linkTo("/issues", {
     project: release.projectId,
     release: release.name,
@@ -121,7 +140,10 @@ export default async function ReleasePage({
         {[["all", "All environments"], ...locations].map(([value, label]) => (
           <Link
             key={value}
-            href={linkTo(`/releases/${release.id}`, { environment: value })}
+            href={linkTo(`/releases/${release.id}`, {
+              ...values,
+              environment: value,
+            })}
             aria-current={environment === value ? "page" : undefined}
           >
             {label}
@@ -197,13 +219,12 @@ export default async function ReleasePage({
         {issues.length ? (
           <div className="table-scroll">
             <table>
-              <thead>
-                <tr>
-                  <th>Issue</th>
-                  <th>Status</th>
-                  <th className="numeric">Events in release</th>
-                </tr>
-              </thead>
+              <SortableTableHead
+                table="releaseIssues"
+                sorting={sorting}
+                path={`/releases/${release.id}`}
+                values={values}
+              />
               <tbody>
                 {issues.map((issue) => (
                   <tr key={issue.id}>
@@ -238,6 +259,12 @@ export default async function ReleasePage({
             Release history is kept after individual events expire.
           </Empty>
         )}
+        <Pagination
+          path={`/releases/${release.id}`}
+          values={values}
+          page={page}
+          total={issueCount}
+        />
       </section>
     </div>
   );

@@ -7,6 +7,7 @@ import ReleasePage from "../../apps/web/src/app/(dashboard)/releases/[id]/page";
 
 const { db } = vi.hoisted(() => ({
   db: {
+    $queryRaw: vi.fn(),
     release: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
     project: { findMany: vi.fn() },
     errorEvent: { groupBy: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
@@ -50,6 +51,9 @@ const releases = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.$queryRaw.mockResolvedValue(
+    ["first", "second", "third", "issue"].map((id) => ({ id })),
+  );
   db.release.findMany.mockResolvedValue(releases);
   db.release.findFirst.mockResolvedValue(releases[1]);
   db.release.count.mockResolvedValue(2);

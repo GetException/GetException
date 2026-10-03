@@ -22,8 +22,7 @@ export function InvitationForm({
 
   if (created) {
     return (
-      <>
-        <InvitationLink {...created} />
+      <InvitationLink {...created}>
         <Button
           type="button"
           className="button"
@@ -31,7 +30,7 @@ export function InvitationForm({
         >
           Create another invitation
         </Button>
-      </>
+      </InvitationLink>
     );
   }
 

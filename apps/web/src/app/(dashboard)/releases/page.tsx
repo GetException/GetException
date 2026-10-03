@@ -17,6 +17,10 @@ import {
 } from "../../../components/releases/presentation";
 import { dateTime, number, releaseLabel } from "../../../lib/format";
 import { linkTo, type Search } from "../../../lib/search-params";
+import { releasePageIds } from "../../../server/releases/list";
+import { inPageOrder } from "../../../server/table-order";
+import { SortableTableHead } from "../../../components/dashboard/SortableTableHead";
+import { SortFields } from "../../../components/dashboard/SortFields";
 
 export default async function ReleasesPage({
   searchParams,
@@ -28,11 +32,10 @@ export default async function ReleasesPage({
   const { member } = await dashboardUser();
   const { db } = getRuntime();
   const where = releaseWhere(member, filters);
-  const [releases, total, projects] = await Promise.all([
+  const ids = await releasePageIds(db, member, filters);
+  const [rows, total, projects] = await Promise.all([
     db.release.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      skip: (page - 1) * PAGE_SIZE,
+      where: { ...where, id: { in: ids.map(({ id }) => id) } },
       take: PAGE_SIZE,
       include: { project: { select: { name: true } }, deployments: true },
     }),
@@ -44,6 +47,7 @@ export default async function ReleasesPage({
       select: { id: true, name: true },
     }),
   ]);
+  const releases = inPageOrder(rows, ids);
   const counts = releases.length
     ? await db.errorEvent.groupBy({
         by: ["projectId", "release"],
@@ -58,7 +62,7 @@ export default async function ReleasesPage({
         _max: { receivedAt: true },
       })
     : [];
-  const groups = new Map<string, typeof releases>();
+  const groups: { key: string; items: typeof releases }[] = [];
 
   for (const release of releases) {
     const reviews = releaseReviews(release.deployments);
@@ -66,10 +70,14 @@ export default async function ReleasesPage({
       environment === "staging" && !review && reviews.length === 1
         ? `${release.projectId}/${reviews[0]}`
         : "";
-    const group = groups.get(key) ?? [];
+    const previous = groups.at(-1);
 
-    group.push(release);
-    groups.set(key, group);
+    // Group adjacent builds only; regrouping the whole page would undo sorting.
+    if (previous?.key === key) {
+      previous.items.push(release);
+    } else {
+      groups.push({ key, items: [release] });
+    }
   }
 
   return (
@@ -87,11 +95,10 @@ export default async function ReleasesPage({
             <Link
               key={value}
               href={linkTo("/releases", {
-                project,
-                q,
+                ...filters,
+                page: 1,
                 environment: value,
-                maps,
-                ...(value === "staging" ? { review } : {}),
+                review: value === "staging" ? review : undefined,
               })}
               aria-current={environment === value ? "page" : undefined}
             >
@@ -100,6 +107,7 @@ export default async function ReleasesPage({
           ))}
         </nav>
         <form key={JSON.stringify(filters)} className="filters" method="get">
+          <SortFields sorting={filters} />
           <input type="hidden" name="environment" value={environment} />
           {review && <input type="hidden" name="review" value={review} />}
           <label className="filter-field search-field">
@@ -128,7 +136,11 @@ export default async function ReleasesPage({
           {review && (
             <Link
               className="text-link"
-              href={linkTo("/releases", { project, environment, q, maps })}
+              href={linkTo("/releases", {
+                ...filters,
+                review: undefined,
+                page: 1,
+              })}
             >
               All merge requests
             </Link>
@@ -137,23 +149,21 @@ export default async function ReleasesPage({
         {releases.length ? (
           <div className="table-scroll">
             <table className="releases-table">
-              <thead>
-                <tr>
-                  <th>Version / project</th>
-                  <th>Environment</th>
-                  <th>Merge request</th>
-                  <th>Latest event</th>
-                  <th className="numeric">Events</th>
-                  <th>Source maps</th>
-                </tr>
-              </thead>
-              {[...groups].map(([group, items]) => (
-                <tbody key={group || "releases"}>
+              <SortableTableHead
+                table="releases"
+                sorting={filters}
+                path="/releases"
+                values={filters}
+              />
+              {groups.map(({ key: group, items }) => (
+                <tbody key={items[0]!.id}>
                   {group && (
                     <tr className="release-group">
                       <th colSpan={6} scope="rowgroup">
                         <Link
                           href={linkTo("/releases", {
+                            ...filters,
+                            page: 1,
                             project: items[0]!.projectId,
                             environment,
                             review: releaseReviews(items[0]!.deployments)[0],
@@ -217,6 +227,8 @@ export default async function ReleasesPage({
                                   className="review-badge"
                                   key={key}
                                   href={linkTo("/releases", {
+                                    ...filters,
+                                    page: 1,
                                     project: release.projectId,
                                     environment: "staging",
                                     review: key,
@@ -263,7 +275,7 @@ export default async function ReleasesPage({
         )}
         <Pagination
           path="/releases"
-          values={{ project, q, environment, review, maps }}
+          values={filters}
           page={page}
           total={total}
         />
