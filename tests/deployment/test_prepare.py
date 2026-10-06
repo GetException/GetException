@@ -116,6 +116,57 @@ class PrepareReleaseTests(unittest.TestCase):
         self.assertEqual(self.prepare(), released)
         self.assertFalse(any(command[0] == "corepack" for command in self.commands))
 
+    def test_server_fix_preserves_sdk_version_and_has_an_empty_prepared_commit(self):
+        previous = self.prepare()
+        self.git("checkout", "-B", "stable", previous)
+        Path("server.py").write_text("server change\n")
+        self.git("add", "server.py")
+        self.git("commit", "-m", "Fix server")
+        self.git("push", "origin", "stable")
+        self.source = self.git("rev-parse", "HEAD")
+        self.commands.clear()
+        checks = []
+        released = self.prepare(lambda *args, **kwargs: checks.append(True))
+        self.assertEqual(checks, [True])
+        self.assertEqual(prepare.prepared_source(released), self.source)
+        self.assertEqual(self.git("diff", "--name-only", self.source, released), "")
+        self.assertFalse(any("workspace" in command for command in self.commands))
+        for name in ["browser", "react", "cli"]:
+            self.assertEqual(json.loads((Path("packages") / name / "package.json").read_text())["version"], "0.1.2")
+
+    def test_sdk_protocol_or_build_inputs_still_bump_the_sdk(self):
+        for filename in ["packages/browser/src/index.ts", "packages/protocol/src/event.ts", "scripts/build.ts"]:
+            with self.subTest(filename=filename):
+                previous = self.prepare()
+                self.git("checkout", "-B", "stable", previous)
+                target = Path(filename)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("input change\n")
+                self.git("add", filename)
+                self.git("commit", "-m", "Change SDK input")
+                self.git("push", "origin", "stable")
+                self.source = self.git("rev-parse", "HEAD")
+                self.assertTrue(prepare.sdk_changed(self.source))
+                before = json.loads((Path("packages/browser/package.json")).read_text())["version"]
+                self.prepare()
+                expected = "0.1." + str(int(before.split(".")[2]) + 1)
+                self.assertEqual(json.loads((Path("packages/browser/package.json")).read_text())["version"], expected)
+
+    def test_server_preparation_cannot_include_unreviewed_file_changes(self):
+        previous = self.prepare()
+        self.git("checkout", "-B", "stable", previous)
+        Path("server.py").write_text("server change\n")
+        self.git("add", "server.py")
+        self.git("commit", "-m", "Fix server")
+        self.git("push", "origin", "stable")
+        self.source = self.git("rev-parse", "HEAD")
+        self.prepare()
+        Path("unexpected.txt").write_text("not a preparation change")
+        self.git("add", "unexpected.txt")
+        self.git("commit", "--amend", "--no-edit")
+        with self.assertRaisesRegex(RuntimeError, "Unexpected files"):
+            prepare.prepared_source(self.git("rev-parse", "HEAD"))
+
     def test_extra_changes_cannot_masquerade_as_a_release_commit(self):
         self.prepare()
         Path("unexpected.txt").write_text("not a version change")

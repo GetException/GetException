@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { verifyMemberDeletion } from "../../e2e/member-deletion-scenario";
 import { totp } from "../../apps/web/src/server/crypto";
+import { NavigationFailure, openPage } from "../../e2e/navigation";
 
 async function fillOtp(page: Page, code: string) {
   const cells = page
@@ -36,16 +37,26 @@ test("installed release: setup, real SDK events and preserved login", async ({
   const page = await context.newPage();
   const origin = "https://monitor.localhost";
   let phase = "setup";
+  let navigationStatus: number | undefined;
+  const navigate = async (path: string) => {
+    navigationStatus = undefined;
+    const response = await openPage(page, origin + path);
+
+    navigationStatus = response?.status();
+  };
 
   try {
     if (restored) {
-      await page.goto(origin + "/setup");
+      phase = "restart/setup redirect";
+      await navigate("/setup");
       await expect(page).toHaveURL(origin + "/login");
-      await page.goto(origin + "/issues");
+      phase = "restart/preserved session";
+      await navigate("/issues");
       await expect(
         page.getByText("Browser fixture error", { exact: false }).first(),
       ).toBeVisible();
 
+      phase = "restart/test credentials";
       const credentials = JSON.parse(readFileSync(credentialsFile, "utf8")) as {
         email: string;
         password: string;
@@ -54,7 +65,8 @@ test("installed release: setup, real SDK events and preserved login", async ({
       };
 
       await context.clearCookies();
-      await page.goto(origin + "/login");
+      phase = "restart/login page";
+      await navigate("/login");
       await page.getByLabel("Email", { exact: true }).fill(credentials.email);
       await page
         .getByLabel("Password", { exact: true })
@@ -62,6 +74,8 @@ test("installed release: setup, real SDK events and preserved login", async ({
       await expect
         .poll(() => Math.floor(Date.now() / 30_000), { timeout: 65_000 })
         .toBeGreaterThan(credentials.counter);
+
+      phase = "restart/password and TOTP";
 
       const counter = Math.floor(Date.now() / 30_000);
 
@@ -324,9 +338,21 @@ test("installed release: setup, real SDK events and preserved login", async ({
     writeFileSync(sessionFile, JSON.stringify(await context.storageState()), {
       mode: 0o600,
     });
-  } catch {
+  } catch (error) {
     // Never let Playwright error output serialize a setup secret, DSN, cookie or password.
-    throw new Error("Deployment browser check failed during: " + phase);
+    const code =
+      error instanceof NavigationFailure ? error.code : "CHECK_FAILED";
+
+    // eslint-disable-next-line preserve-caught-error -- The original cause can contain credentials; emit only the safe diagnostic code.
+    throw new Error(
+      "Deployment browser check failed during: " +
+        phase +
+        " (" +
+        code +
+        "; navigation HTTP: " +
+        (navigationStatus ?? "unavailable") +
+        ")",
+    );
   } finally {
     await context.close();
   }

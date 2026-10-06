@@ -31,7 +31,8 @@ def prepared_source(commit):
         raise RuntimeError("Release commit must be a direct child of its source")
     paths = ["packages/" + name + "/package.json" for name in ["browser", "react", "cli"]]
     changed = set(run("git", "diff", "--name-only", source, commit).splitlines())
-    if not set(paths) <= changed <= set(paths) | {"yarn.lock"}:
+    server_only = message.splitlines()[0].startswith("chore: release server with SDK ")
+    if (server_only and changed) or (not server_only and not set(paths) <= changed <= set(paths) | {"yarn.lock"}):
         raise RuntimeError("Unexpected files in the prepared release commit")
     versions = []
     for path in paths:
@@ -39,14 +40,27 @@ def prepared_source(commit):
         after = json.loads(run("git", "show", commit + ":" + path))
         if not isinstance(before.get("version"), str) or not re.fullmatch(r"\d+\.\d+\.\d+", before["version"]):
             raise RuntimeError("Invalid source SDK version")
-        major, minor, patch = map(int, before["version"].split("."))
-        before["version"] = f"{major}.{minor}.{patch + 1}"
+        if not server_only:
+            major, minor, patch = map(int, before["version"].split("."))
+            before["version"] = f"{major}.{minor}.{patch + 1}"
         if after != before:
             raise RuntimeError("Prepared manifests must only increment the SDK patch version")
         versions.append(after["version"])
-    if len(set(versions)) != 1 or message.splitlines()[0] != "chore: release SDK " + versions[0] + " [skip ci]":
+    subject = "chore: release server with SDK " if server_only else "chore: release SDK "
+    if len(set(versions)) != 1 or message.splitlines()[0] != subject + versions[0] + " [skip ci]":
         raise RuntimeError("Prepared release subject or SDK versions do not match")
     return source
+
+
+def sdk_changed(source):
+    # These inputs can alter the packed SDKs, including their bundled protocol.
+    roots = ("packages/browser/", "packages/react/", "packages/cli/", "packages/protocol/", ".yarn/")
+    files = {"package.json", "yarn.lock", ".yarnrc.yml", ".nvmrc", "tsconfig.json", "scripts/build.ts", "LICENSE"}
+    for previous in run("git", "rev-list", "--first-parent", source).splitlines()[1:]:
+        if prepared_source(previous):
+            changed = run("git", "diff", "--name-only", previous, source).splitlines()
+            return any(path in files or path.startswith(roots) for path in changed)
+    return True
 
 
 def prepare(source):
@@ -68,17 +82,21 @@ def prepare(source):
     versions = [json.loads(path.read_text())["version"] for path in manifests]
     if len(set(versions)) != 1 or not re.fullmatch(r"\d+\.\d+\.\d+", versions[0]):
         raise RuntimeError("SDK versions must be aligned stable semver versions")
-    major, minor, patch = map(int, versions[0].split("."))
-    version = f"{major}.{minor}.{patch + 1}"
-    for name in ["browser", "react", "cli"]:
-        run("corepack", "yarn", "workspace", "@getexception/" + name, "version", version)
-    run("corepack", "yarn", "install", "--no-immutable", "--mode=update-lockfile")
+    bump = sdk_changed(source)
+    version = versions[0]
+    if bump:
+        major, minor, patch = map(int, version.split("."))
+        version = f"{major}.{minor}.{patch + 1}"
+        for name in ["browser", "react", "cli"]:
+            run("corepack", "yarn", "workspace", "@getexception/" + name, "version", version)
+        run("corepack", "yarn", "install", "--no-immutable", "--mode=update-lockfile")
     run("corepack", "yarn", "format")
     # Required before EVERY commit, including the automated release commit.
     subprocess.run(["corepack", "yarn", "checks"], check=True)
     run("git", "add", "packages/browser/package.json", "packages/react/package.json", "packages/cli/package.json", "yarn.lock")
+    subject = "chore: release SDK " if bump else "chore: release server with SDK "
     run("git", "-c", "user.name=github-actions[bot]", "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-        "commit", "-m", "chore: release SDK " + version + " [skip ci]", "-m", marker)
+        "commit", "--allow-empty", "-m", subject + version + " [skip ci]", "-m", marker)
     sha = run("git", "rev-parse", "HEAD")
     if prepared_source(sha) != source:
         raise RuntimeError("Unexpected release source")

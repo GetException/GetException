@@ -13,7 +13,7 @@ WORKFLOW = REPOSITORY + "/.github/workflows/release.yml"
 
 # Only this transport adapter runs remotely. The installed controller owns signature
 # verification, locking, backups and rollback.
-REMOTE_UPDATE = '''import json, os, pathlib, re, subprocess, sys, tempfile
+REMOTE_UPDATE = '''import json, os, pathlib, re, subprocess, sys, tempfile, urllib.request
 
 def update(directory, sha, proofs):
     os.umask(0o077)
@@ -22,7 +22,7 @@ def update(directory, sha, proofs):
         raise RuntimeError("Invalid deployment identity")
     if not (root / "getexception").is_file() or not (root / "runtime/.env").is_file():
         raise RuntimeError("An existing installation is required")
-    expected = {"attestation.jsonl", "trusted-root.jsonl"}
+    expected = {"attestation.jsonl", "controller-attestation.jsonl", "trusted-root.jsonl"}
     if set(proofs) != expected or any(not isinstance(value, str) or not 0 < len(value) <= 8000000 for value in proofs.values()):
         raise RuntimeError("Invalid release proof files")
     target = root / "runtime/deployments" / sha
@@ -36,7 +36,30 @@ def update(directory, sha, proofs):
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
-    command = [str(root / "getexception"), "update", "--release", sha, "--require-ingestion-smoke",
+    controller = target / "getexception.py"
+    url = "https://github.com/GetException/GetException/releases/download/deploy-" + sha + "/getexception.py"
+    request = urllib.request.Request(url, headers={"User-Agent": "GetException-deploy"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        if not response.geturl().startswith("https://"):
+            raise RuntimeError("Refusing insecure controller download")
+        content = response.read(2000001)
+    if not 0 < len(content) <= 2000000:
+        raise RuntimeError("Invalid controller download size")
+    fd, temporary = tempfile.mkstemp(dir=target)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+        os.replace(temporary, controller)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    subprocess.run(["gh", "attestation", "verify", str(controller), "--repo", "GetException/GetException",
+                    "--signer-workflow", "GetException/GetException/.github/workflows/release.yml",
+                    "--source-ref", "refs/heads/stable", "--source-digest", sha,
+                    "--bundle", str(target / "controller-attestation.jsonl"),
+                    "--custom-trusted-root", str(target / "trusted-root.jsonl")], check=True, timeout=120)
+    # A verified new controller understands the new manifest before touching the old installation.
+    command = ["python3", str(controller), "update", "--install-dir", str(root), "--release", sha, "--require-ingestion-smoke",
                "--attestation-bundle", str(target / "attestation.jsonl"),
                "--trusted-root", str(target / "trusted-root.jsonl")]
     return subprocess.run(command, check=False).returncode
@@ -64,24 +87,33 @@ def parameters(env):
 
 def release_proofs(sha, temporary):
     archive = temporary / "getexception.tar.gz"
+    controller = temporary / "getexception.py"
     subprocess.run(["gh", "release", "download", "deploy-" + sha, "--repo", REPOSITORY,
                     "--pattern", archive.name, "--pattern", archive.name + ".sha256",
+                    "--pattern", controller.name, "--pattern", controller.name + ".sha256",
                     "--dir", str(temporary)], check=True, timeout=120)
-    expected = (temporary / (archive.name + ".sha256")).read_text().split()
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    if expected != [digest, archive.name]:
-        raise RuntimeError("Release checksum verification failed before SSH")
-    subprocess.run(["gh", "attestation", "download", str(archive), "--repo", REPOSITORY],
-                   cwd=temporary, check=True, timeout=120)
-    bundle = temporary / ("sha256:" + digest + ".jsonl")
+    artifacts = [(archive, "attestation.jsonl"), (controller, "controller-attestation.jsonl")]
+    digests = {}
+    for artifact, name in artifacts:
+        expected = (temporary / (artifact.name + ".sha256")).read_text().split()
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        if expected != [digest, artifact.name]:
+            raise RuntimeError("Release checksum verification failed before SSH")
+        digests[name] = digest
     trusted_root = temporary / "trusted-root.jsonl"
     with trusted_root.open("w") as stream:
         subprocess.run(["gh", "attestation", "trusted-root"], stdout=stream, check=True, timeout=120)
-    subprocess.run(["gh", "attestation", "verify", str(archive), "--repo", REPOSITORY,
-                    "--signer-workflow", WORKFLOW, "--source-ref", "refs/heads/stable",
-                    "--source-digest", sha, "--bundle", str(bundle),
-                    "--custom-trusted-root", str(trusted_root)], check=True, timeout=120)
-    return {"attestation.jsonl": bundle.read_text(), "trusted-root.jsonl": trusted_root.read_text()}
+    proofs = {"trusted-root.jsonl": trusted_root.read_text()}
+    for artifact, name in artifacts:
+        subprocess.run(["gh", "attestation", "download", str(artifact), "--repo", REPOSITORY],
+                       cwd=temporary, check=True, timeout=120)
+        bundle = temporary / ("sha256:" + digests[name] + ".jsonl")
+        subprocess.run(["gh", "attestation", "verify", str(artifact), "--repo", REPOSITORY,
+                        "--signer-workflow", WORKFLOW, "--source-ref", "refs/heads/stable",
+                        "--source-digest", sha, "--bundle", str(bundle),
+                        "--custom-trusted-root", str(trusted_root)], check=True, timeout=120)
+        proofs[name] = bundle.read_text()
+    return proofs
 
 
 def deploy(env):
