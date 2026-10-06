@@ -267,6 +267,13 @@ it("uploads privately, publishes atomically and reprocesses old events with audi
     where: { id: old.issueId },
     data: { status: "resolved" },
   });
+  const priorRelease = `account@${"a".repeat(40)}`;
+  const priorDate = new Date(old.receivedAt.getTime() - 40 * 86400_000);
+
+  await instance.admin.issueHistory.updateMany({
+    where: { issueId: old.issueId, canonical: true },
+    data: { firstSeen: priorDate, firstRelease: priorRelease },
+  });
   const dist = join(instance.directory, "dist");
   const privateDir = join(instance.directory, "private");
 
@@ -382,6 +389,15 @@ it("uploads privately, publishes atomically and reprocesses old events with audi
     },
   ]);
   expect(mapped.issueId).not.toBe(old.issueId);
+  expect(
+    await web.issueHistory.findFirst({
+      where: { issueId: mapped.issueId, canonical: true },
+    }),
+  ).toMatchObject({
+    firstSeen: priorDate,
+    firstRelease: priorRelease,
+    lastRelease: release,
+  });
   expect(
     await instance.admin.issue.findUniqueOrThrow({
       where: { id: old.issueId },

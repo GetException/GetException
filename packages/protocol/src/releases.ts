@@ -1,6 +1,24 @@
 import { z } from "zod";
 import { releaseNameSchema } from "./source-maps";
 
+export const appVersionSchema = z
+  .string()
+  .max(64)
+  .refine((value) => value.trim() === value)
+  .regex(
+    /^(0|[1-9][0-9]{0,9})\.(0|[1-9][0-9]{0,9})\.(0|[1-9][0-9]{0,9})(?:-(?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/,
+  );
+
+export function sanitizeAppVersion(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 64) {
+    return undefined;
+  }
+
+  const parsed = appVersionSchema.safeParse(value);
+
+  return parsed.success ? parsed.data : undefined;
+}
+
 export const RELEASE_ENVIRONMENTS = [
   "production",
   "staging",
@@ -27,6 +45,7 @@ export const deploymentSchema = z
 export const releaseRegistrationSchema = z
   .object({
     release: releaseNameSchema,
+    appVersion: appVersionSchema.optional(),
     deployment: deploymentSchema,
   })
   .strict();

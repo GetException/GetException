@@ -4,6 +4,7 @@ import { type Database, Prisma } from "@getexception/db";
 import { RETENTION_DAYS, safeEventSchema } from "@getexception/protocol";
 import { SourceMapStore } from "@getexception/source-maps";
 import { resolveFrames } from "./source-maps/resolve";
+import { recordIssueObservation } from "./issue-history";
 
 const MAX_ATTEMPTS = 5;
 
@@ -91,23 +92,56 @@ export async function processJob(
       });
 
       if (!existing) {
-        const issue = await tx.issue.upsert({
-          where: { projectId_fingerprint: { projectId, fingerprint: hash } },
-          create: {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${projectId}, 713))`;
+        const remembered = await tx.issueHistory.findFirst({
+          where: {
             projectId,
             fingerprint: hash,
-            title: event.message,
-            exceptionType: event.exceptionType,
-            firstSeen: job.receivedAt,
-            lastSeen: job.receivedAt,
-            eventCount: 1,
+            issueId: { not: null },
+            lastSeen: {
+              gte: new Date(
+                job.receivedAt.getTime() -
+                  RETENTION_DAYS.issueHistory * 86400_000,
+              ),
+            },
           },
-          update: {
-            eventCount: { increment: 1 },
-            lastSeen: job.receivedAt,
-            status: "open",
-          },
+          select: { issueId: true },
         });
+        const canonical = remembered?.issueId
+          ? await tx.issue.findFirst({
+              where: { id: remembered.issueId, projectId },
+            })
+          : null;
+        const issue = canonical
+          ? await tx.issue.update({
+              where: { id: canonical.id },
+              data: {
+                eventCount: { increment: 1 },
+                firstSeen: job.receivedAt,
+                lastSeen: job.receivedAt,
+                status: "open",
+              },
+            })
+          : await tx.issue.upsert({
+              where: {
+                projectId_fingerprint: { projectId, fingerprint: hash },
+              },
+              create: {
+                projectId,
+                fingerprint: hash,
+                title: event.message,
+                exceptionType: event.exceptionType,
+                firstSeen: job.receivedAt,
+                lastSeen: job.receivedAt,
+                eventCount: 1,
+              },
+              update: {
+                eventCount: { increment: 1 },
+                firstSeen: job.receivedAt,
+                lastSeen: job.receivedAt,
+                status: "open",
+              },
+            });
 
         await tx.errorEvent.create({
           data: {
@@ -122,6 +156,7 @@ export async function processJob(
             handled: event.handled,
             environment: event.environment,
             release: event.release,
+            appVersion: event.appVersion,
             dist: event.dist,
             route: event.route,
             apiCode: event.api?.code,
@@ -138,18 +173,28 @@ export async function processJob(
           },
         });
 
+        await recordIssueObservation(tx, issue, event, job.receivedAt, hash);
+
         if (event.release) {
           const release = await tx.release.upsert({
             where: { projectId_name: { projectId, name: event.release } },
             create: {
               projectId,
               name: event.release,
+              appVersion: event.appVersion,
               lastActivityAt: job.receivedAt,
             },
             update: {
               lastActivityAt: job.receivedAt,
             },
           });
+
+          if (event.appVersion) {
+            await tx.release.updateMany({
+              where: { id: release.id, appVersion: null },
+              data: { appVersion: event.appVersion },
+            });
+          }
 
           await tx.releaseDeployment.createMany({
             data: [{ releaseId: release.id, environment: event.environment }],
@@ -277,6 +322,20 @@ export async function retainBatch(db: Database, now = new Date(), batch = 100) {
           AND a."createdAt" >= ${cutoff}
       )
     RETURNING i.id
+  `;
+
+  const historyCutoff = new Date(
+    now.getTime() - RETENTION_DAYS.issueHistory * 86400_000,
+  );
+
+  await db.$queryRaw<{ id: string }[]>`
+    WITH candidates AS (
+      SELECT h.id FROM issue_history h WHERE h."lastSeen" < ${historyCutoff}
+      AND NOT EXISTS (SELECT 1 FROM event_inbox q WHERE q."projectId" = h."projectId" AND q.status IN ('pending', 'processing'))
+      ORDER BY h."lastSeen", h.id LIMIT 100
+    ) DELETE FROM issue_history h USING candidates c WHERE h.id = c.id AND h."lastSeen" < ${historyCutoff}
+      AND NOT EXISTS (SELECT 1 FROM event_inbox q WHERE q."projectId" = h."projectId" AND q.status IN ('pending', 'processing'))
+    RETURNING h.id
   `;
 
   const statsCutoff = new Date(

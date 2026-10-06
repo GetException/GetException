@@ -1,3 +1,6 @@
+import { historyScope } from "../../../../server/issues/history";
+import { IssueReleaseHistory } from "../../../../components/issues/IssueReleaseHistory";
+import { NewInRelease } from "../../../../components/issues/NewInRelease";
 import { projectScope, canResolve } from "../../../../server/access";
 import { EVENT_PAGE_SIZE } from "../../../../lib/pagination";
 import { notFound } from "next/navigation";
@@ -56,7 +59,10 @@ export default async function IssuePage({
   const { db } = getRuntime();
   const issue = await db.issue.findFirst({
     where: { id, project: projectScope(member) },
-    include: { project: { select: { name: true } } },
+    include: {
+      project: { select: { name: true } },
+      histories: { where: historyScope(), orderBy: { environment: "asc" } },
+    },
   });
 
   if (!issue) {
@@ -98,6 +104,7 @@ export default async function IssuePage({
         eventId: true,
         receivedAt: true,
         release: true,
+        appVersion: true,
         environment: true,
         handled: true,
         level: true,
@@ -144,11 +151,28 @@ export default async function IssuePage({
                   name: selected.release,
                 },
               },
-              select: { id: true, deployments: true },
+              select: { id: true, appVersion: true, deployments: true },
             })
           : null,
       ])
     : [null, null, null];
+  const historyReleases = await db.release.findMany({
+    where: {
+      projectId: issue.projectId,
+      name: {
+        in: issue.histories.flatMap((h) =>
+          [h.firstRelease, h.lastRelease].filter((r): r is string =>
+            Boolean(r),
+          ),
+        ),
+      },
+    },
+    select: { id: true, name: true, appVersion: true },
+    take: 6,
+  });
+  const first = issue.histories.find(
+    (h) => h.environment === selected?.environment,
+  );
   const originals = originalFrameSchema
     .nullable()
     .array()
@@ -190,12 +214,23 @@ export default async function IssuePage({
                   environment={selected.environment}
                   releaseName={selected.release}
                   release={release}
+                  appVersion={selected.appVersion}
                 />
               </>
             )}
           </div>
         </div>
-        <Status status={issue.status} regression={issue.regression} />
+        <div className="actions">
+          {first?.firstSeenKnown &&
+            first.firstRelease &&
+            first.firstRelease === selected?.release && (
+              <NewInRelease
+                release={first.firstRelease}
+                appVersion={release?.appVersion ?? first.firstAppVersion}
+              />
+            )}
+          <Status status={issue.status} regression={issue.regression} />
+        </div>
       </div>
       <div className="issue-toolbar">
         <span className="muted small">
@@ -323,7 +358,10 @@ export default async function IssuePage({
                         className="text-link mono"
                         href={`/releases/${release.id}`}
                       >
-                        {releaseLabel(selected.release!)}
+                        {releaseLabel(
+                          selected.release!,
+                          release.appVersion ?? selected.appVersion,
+                        )}
                       </Link>
                     ) : (
                       "Not provided"
@@ -337,6 +375,12 @@ export default async function IssuePage({
                   </div>
                 )}
               </dl>
+              <IssueReleaseHistory
+                observations={issue.histories.filter(
+                  (h) => h.environment === selected.environment,
+                )}
+                releases={historyReleases}
+              />
               <EventDiagnostics event={selected} />
               <div className="tags-section">
                 <h3>Tags</h3>
@@ -383,7 +427,9 @@ export default async function IssuePage({
             total={activity.total}
             caption={breakdownCaption}
             rows={breakdowns.releases.map((row) => ({
-              label: row.label ? releaseLabel(row.label) : "Not reported",
+              label: row.label
+                ? releaseLabel(row.label, row.appVersion)
+                : "Not reported",
               title: row.label ?? undefined,
               count: row.count,
               href: row.releaseId
@@ -439,7 +485,14 @@ export default async function IssuePage({
                         )}
                       </td>
                       <td className="mono">
-                        {event.release ? releaseLabel(event.release) : "—"}
+                        {event.release
+                          ? releaseLabel(
+                              event.release,
+                              historyReleases.find(
+                                (r) => r.name === event.release,
+                              )?.appVersion ?? event.appVersion,
+                            )
+                          : "—"}
                       </td>
                       <td>{event.environment}</td>
                       <td>{event.level}</td>

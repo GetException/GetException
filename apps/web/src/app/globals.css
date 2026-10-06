@@ -2102,3 +2102,16 @@ tbody tr:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.new-in-release {
+  color: var(--accent);
+  margin-block: 0.35rem;
+}
+.issue-release-history {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border);
+}
+.history-date {
+  display: block;
+  margin-top: 0.35rem;
+}

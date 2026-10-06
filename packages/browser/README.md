@@ -29,13 +29,16 @@ Use your installation's separate HTTPS ingest domain in the DSN. It must resolve
 
 ## Configuration
 
-| Option        | Meaning                                                               |
-| ------------- | --------------------------------------------------------------------- |
-| `dsn`         | Required HTTPS project DSN from GetException.                         |
-| `environment` | `production`, `staging` or `development` (default).                   |
-| `release`     | Optional `<project-slug>@<full 40-character Git SHA>`.                |
-| `dist`        | Optional build identifier, up to 64 letters, digits, `.`, `_` or `-`. |
-| `enabled`     | Set to `false` to skip initialization.                                |
+| Option        | Meaning                                                                                |
+| ------------- | -------------------------------------------------------------------------------------- |
+| `dsn`         | Required HTTPS project DSN from GetException.                                          |
+| `environment` | `production`, `staging` or `development` (default).                                    |
+| `release`     | Optional `<project-slug>@<full 40-character Git SHA>`.                                 |
+| `appVersion`  | Optional app SemVer, e.g. `3.192.75`, up to 64 characters. Does not replace `release`. |
+| `dist`        | Optional build identifier, up to 64 letters, digits, `.`, `_` or `-`.                  |
+| `enabled`     | Set to `false` to skip initialization.                                                 |
+
+An invalid `appVersion` is ignored without dropping the error. GitLab deployments can pass the same `appVersion` to `deployWithGetException` for CI registration.
 
 Importing the package does not initialize monitoring. Invalid configuration disables sending without throwing into the application. Calling `init` again while the client is active does nothing; use `close` before initializing another client.
 

@@ -409,7 +409,9 @@ it("counts beyond the former 25,000-event cap, excludes boundary events and enfo
   expect(overview.projects.map((row) => row.id)).toEqual([project.id]);
   expect(breakdown).toEqual({
     browsers: [{ label: null, count: 25002 }],
-    releases: [{ label: null, releaseId: null, count: 25002 }],
+    releases: [
+      { label: null, releaseId: null, appVersion: null, count: 25002 },
+    ],
   });
 
   await db.member.update({

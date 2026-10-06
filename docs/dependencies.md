@@ -33,3 +33,7 @@ API интеграции проверялся по исходникам факт
 `yarn ci:tools` устанавливает actionlint 1.7.12 и gitleaks 8.30.1 в игнорируемый `.artifacts/tools`. Grype 0.118.0 устанавливается только в job сканирования образов. Версии и SHA256 официальных архивов закреплены в `scripts/release/tools.json`; перед извлечением проверяется checksum. Эти бинарники не входят в npm packages или runtime images.
 
 Проверка лицензий читает установленные manifests, включая платформенные native dependencies, и останавливается на неизвестной лицензии. В allow-list перечислены используемые permissive лицензии, MPL-2.0 (lightningcss/вендор Next), EPL-2.0 (elkjs), LGPL-3.0-or-later (неизменённые native libvips) и CC-BY-4.0 (caniuse-lite). Notices и LICENSE зависимостей сохраняются в `node_modules` внутри образов. `seq-queue@0.0.5` не указывает license в manifest; проверяется MIT-текст его LICENSE. Это техническая проверка состава зависимостей; новые лицензии требуют отдельного review.
+
+## Исправления транзитивных зависимостей 6 октября 2026
+
+Обязательный npm audit обнаружил advisories в существующем lockfile. Через `yarn up -R sharp source-map-js` обновлены совместимые транзитивные версии: `sharp` 0.35.5 с исправленным librsvg и `source-map-js` 1.2.2. Аудит остаётся обязательным. Источники: [sharp](https://github.com/advisories/GHSA-wq5f-xc86-pv6w), [source-map-js](https://github.com/advisories/GHSA-68fv-2mgg-jv7q).

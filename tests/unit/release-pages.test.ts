@@ -114,6 +114,7 @@ it("scopes counts and issue links to the selected environment while retaining re
       regression: false,
       _count: { events: 2 },
       events: [{ eventId: "preview-event" }],
+      histories: [],
     },
   ]);
   const html = renderToStaticMarkup(
@@ -196,4 +197,27 @@ it("shows removed artifacts separately from retained events with source context"
       symbolicationState: { in: ["complete", "partial"] },
     },
   });
+});
+
+it("shows the app version and keeps release totals separate from the new-only issue view", async () => {
+  db.release.findFirst.mockResolvedValue({
+    ...releases[1],
+    appVersion: "3.192.75",
+  });
+  db.issue.count.mockResolvedValueOnce(5).mockResolvedValueOnce(2);
+  const html = renderToStaticMarkup(
+    await ReleasePage({
+      params: Promise.resolve({ id: "second" }),
+      searchParams: Promise.resolve({ environment: "staging", novelty: "new" }),
+    }),
+  );
+
+  expect(html).toContain("3.192.75");
+  expect(html).toContain("New issues (2)");
+  expect(html).toContain("novelty=new");
+  expect(db.issue.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({ AND: expect.any(Array) }),
+    }),
+  );
 });

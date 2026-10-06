@@ -1,7 +1,11 @@
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ciContextSchema, type CiContext } from "@getexception/protocol";
+import {
+  ciContextSchema,
+  sanitizeAppVersion,
+  type CiContext,
+} from "@getexception/protocol";
 import { buildContext } from "./ci";
 import { type CiCredential } from "./credentials";
 import { CliError } from "./diagnostics";
@@ -14,6 +18,7 @@ export type GitLabDeploymentOptions = {
   url: string;
   projectId: string;
   releasePrefix: string;
+  appVersion?: string;
   repository: { id: number; path: string };
   environment: "production" | "staging";
   environmentName: string;
@@ -280,6 +285,7 @@ export async function deployWithGetException(
           credential,
           {
             release: context.release,
+            appVersion: sanitizeAppVersion(options.appVersion),
             deployment: context.deployment,
           },
           options.transport,

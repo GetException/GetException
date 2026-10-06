@@ -854,6 +854,7 @@ describe("durable inbox and separate SQL roles", () => {
         manualInvitations,
         monitoringRetention,
         productionAdmission,
+        releaseObservations,
       ] = migrationFiles();
 
       await upgrade.query(initial!);
@@ -1075,6 +1076,34 @@ describe("durable inbox and separate SQL roles", () => {
         (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
           ?.version,
       ).toBe(10);
+      await upgrade.query(releaseObservations!);
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rowCount,
+      ).toBe(0);
+      await upgrade.query(
+        "INSERT INTO _prisma_migrations(finished_at) VALUES (now())",
+      );
+      expect(
+        (await upgrade.query("SELECT version FROM runtime_schema")).rows[0]
+          ?.version,
+      ).toBe(11);
+      expect(
+        (
+          await upgrade.query(
+            'SELECT "firstRelease", "firstSeenKnown" FROM issue_history WHERE "issueId" = $1',
+            ["upgrade-issue"],
+          )
+        ).rows,
+      ).toEqual([
+        { firstRelease: `existing@${"a".repeat(40)}`, firstSeenKnown: false },
+      ]);
+      expect(
+        (
+          await upgrade.query(
+            "SELECT has_table_privilege('getexception_ingest', 'issue_history', 'SELECT') AS allowed",
+          )
+        ).rows[0]?.allowed,
+      ).toBe(false);
       expect(
         (
           await upgrade.query(

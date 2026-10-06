@@ -38,7 +38,7 @@ export function createDatabase(url: string) {
 export async function assertSchema(db: PrismaClient | IngestPrismaClient) {
   const schema = await db.runtimeSchema.findFirst();
 
-  if (schema?.version !== 10) {
+  if (schema?.version !== 11) {
     throw new Error("Database migrations are required");
   }
 }

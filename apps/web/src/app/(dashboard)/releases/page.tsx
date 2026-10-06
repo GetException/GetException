@@ -115,7 +115,7 @@ export default async function ReleasesPage({
             <input
               name="q"
               defaultValue={q}
-              placeholder="Release name or commit SHA…"
+              placeholder="App version or commit SHA…"
               maxLength={160}
             />
           </label>
@@ -204,10 +204,13 @@ export default async function ReleasesPage({
                             </span>
                             <span>
                               <strong className="mono" title={release.name}>
-                                {releaseLabel(release.name)}
+                                {releaseLabel(release.name, release.appVersion)}
                               </strong>
                               <small className="muted">
                                 {release.project.name}
+                                {release.appVersion
+                                  ? ` · ${releaseLabel(release.name)}`
+                                  : ""}
                               </small>
                             </span>
                           </Link>

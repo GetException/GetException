@@ -43,7 +43,21 @@ export function releaseWhere(
       ...(filters.project ? { id: filters.project } : {}),
     },
     ...(filters.q
-      ? { name: { contains: filters.q, mode: "insensitive" as const } }
+      ? {
+          AND: [
+            {
+              OR: [
+                { name: { contains: filters.q, mode: "insensitive" as const } },
+                {
+                  appVersion: {
+                    contains: filters.q,
+                    mode: "insensitive" as const,
+                  },
+                },
+              ],
+            },
+          ],
+        }
       : {}),
     ...(filters.maps === "unavailable"
       ? { sourceMapsState: { in: ["missing", "removed", "failed"] } }

@@ -10,18 +10,18 @@ React заявлен как peer dependency `^18.0.0 || ^19.0.0`. Docker-тес�
 
 Основа — официальные `@sentry/browser` и `@sentry/react` **10.73.0**. Зависимости установлены под внутренними npm alias `@getexception/sentry-browser` и `@getexception/sentry-react`, чтобы пользовательский alias Sentry → GetException не создавал рекурсию. Import не вызывает `init`, не подключает обработчики и ничего не отправляет. Внутренняя конфигурация Sentry использует технический числовой project ID: его validator не принимает UUID с буквенным префиксом. Собственный transport всегда отправляет по исходному UUID из DSN, а внутренний DSN не попадает в Envelope. Это проверяется отдельно с настоящим SDK.
 
-| API                                  | Поддержка и отличие                                                                                                                                                                        |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `init(options)`                      | Только `dsn`, `release`, `dist`, `environment`, `enabled`. HTTPS обязателен; неверный DSN отключает отправку без исключения в SPA. Повторный `init` при активном клиенте ничего не меняет. |
-| `captureException(error, context?)`  | Официальный разбор Error и stack; возвращает event ID или пустую строку, если SDK не активен/не смог принять вызов. Hint/attachments не поддерживаются.                                    |
-| `captureMessage(message, level)`     | Только `error` и `fatal`, по умолчанию `error`. Другие уровни запрещены типами и дают пустой ID без отправки при вызове из JS.                                                             |
-| `setTag`, `setTags`                  | `feature`, `component`, `operation`, до 120 символов, очистка значений. Остальные ключи удаляются. Owner UI настройки allow-list ещё нет.                                                  |
-| `setContext(name, value)`            | `app: { route }` и ограниченный `api: { code, reason, status_code }`. URL превращается в очищенный path без origin, query и fragment.                                                      |
-| `addBreadcrumb`                      | Только `navigation`, `http`, `manual`; безопасные `path`, `method`, `status_code`, `duration`, `operation`. Максимум 50. Console, DOM и произвольные data не собираются.                   |
-| `withScope(callback)`                | Синхронный scoped callback с перечисленными setters. Callback вызывается и до init; его собственные исключения сохраняют обычное поведение приложения. Async isolation scope не обещается. |
-| `flush(timeout)`, `close(timeout)`   | `Promise<boolean>`, по умолчанию 1500 мс, максимум 2000 мс. Close завершает отправку и прерывает оставшиеся запросы.                                                                       |
-| `window.error`, `unhandledrejection` | Через официальные global handlers / browser API errors integrations после init.                                                                                                            |
-| `ErrorBoundary`                      | Экспорт официального React ErrorBoundary для React 18/19. Сбор ошибок начинается после init. Собственный fallback задаёт приложение.                                                       |
+| API                                  | Поддержка и отличие                                                                                                                                                                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init(options)`                      | Только `dsn`, `release`, `appVersion`, `dist`, `environment`, `enabled`. HTTPS обязателен; неверный DSN отключает отправку без исключения в SPA. Повторный `init` при активном клиенте ничего не меняет. |
+| `captureException(error, context?)`  | Официальный разбор Error и stack; возвращает event ID или пустую строку, если SDK не активен/не смог принять вызов. Hint/attachments не поддерживаются.                                                  |
+| `captureMessage(message, level)`     | Только `error` и `fatal`, по умолчанию `error`. Другие уровни запрещены типами и дают пустой ID без отправки при вызове из JS.                                                                           |
+| `setTag`, `setTags`                  | `feature`, `component`, `operation`, до 120 символов, очистка значений. Остальные ключи удаляются. Owner UI настройки allow-list ещё нет.                                                                |
+| `setContext(name, value)`            | `app: { route }` и ограниченный `api: { code, reason, status_code }`. URL превращается в очищенный path без origin, query и fragment.                                                                    |
+| `addBreadcrumb`                      | Только `navigation`, `http`, `manual`; безопасные `path`, `method`, `status_code`, `duration`, `operation`. Максимум 50. Console, DOM и произвольные data не собираются.                                 |
+| `withScope(callback)`                | Синхронный scoped callback с перечисленными setters. Callback вызывается и до init; его собственные исключения сохраняют обычное поведение приложения. Async isolation scope не обещается.               |
+| `flush(timeout)`, `close(timeout)`   | `Promise<boolean>`, по умолчанию 1500 мс, максимум 2000 мс. Close завершает отправку и прерывает оставшиеся запросы.                                                                                     |
+| `window.error`, `unhandledrejection` | Через официальные global handlers / browser API errors integrations после init.                                                                                                                          |
+| `ErrorBoundary`                      | Экспорт официального React ErrorBoundary для React 18/19. Сбор ошибок начинается после init. Собственный fallback задаёт приложение.                                                                     |
 
 Не экспортируются `setUser`, tracing, replay, profiling, feedback, logs, router integrations, пользовательский transport/integrations, global processors и настройки Sentry, расширяющие сбор данных. TypeScript отклоняет эти импорты/опции. Перед миграцией удалите неподдерживаемые вызовы; простая замена имени пакета не делает весь API Sentry совместимым.
 
@@ -32,6 +32,7 @@ GetException.init({
   dsn: import.meta.env.VITE_GETEXCEPTION_DSN,
   environment: "production",
   release: "customer-portal@0123456789abcdef0123456789abcdef01234567",
+  appVersion: "3.192.75",
 });
 GetException.setTag("feature", "checkout");
 GetException.setContext("app", { route: "/checkout" });
@@ -58,3 +59,13 @@ yarn add --exact '@sentry/react@npm:@getexception/react@SDK_VERSION'
 `fetch` использует только HTTPS origin из DSN, `credentials: "omit"`, `referrerPolicy: "no-referrer"`, `redirect: "error"`. Очередь ограничена 30 запросами, запрос — двумя секундами. `429` включает ограниченный backoff; сетевые ошибки не выбрасываются в SPA. Поддерживается один error item в Envelope. Данные очищаются перед отправкой и независимо повторно на ingest.
 
 Автоматические breadcrumbs, IP, cookies, headers, request body, form values, local/session storage, arbitrary contexts, extra, user и локальные переменные stack не отправляются. Санитайзер удаляет распространённые токены, email и секреты в разрешённых строках. Необычно закодированные секреты в тексте ошибки невозможно гарантированно распознать: приложение не должно помещать их в message, tags или ручные breadcrumbs.
+
+## Версия приложения и первое появление ошибки
+
+Необязательный `appVersion` принимает SemVer до 64 символов (`3.192.75`, `3.192.75-beta.2`). Он передаётся как разрешённое `contexts.app.version`, очищается SDK и ingest и не меняет `release`, fingerprint или область source maps. Неправильное значение удаляется без потери ошибки. Передавайте номер существующей сборки приложения, а не версию SDK.
+
+Для GitLab используйте также `deployWithGetException({ ..., appVersion })`. Эта опция передаётся авторизованной регистрации релиза после deploy; новые credentials не нужны. Регистрация работает при выключенных картах доверенного источника. При недоступном CI context номер всё ещё приходит с browser-событиями. Авторизованная регистрация имеет приоритет: последующие события не переписывают известный номер.
+
+В Issues выберите release и First appearance → New in selected release. Новизна относится к конкретному SHA и окружению; несколько MR-коммитов с одной версией остаются разными сборками. Страница release показывает счётчик новых групп, а issue — первый/последний релиз в окружении выбранного события. История хранится 90 дней после последнего события в окружении; старые неполные данные не помечаются новыми. Regression остаётся отдельным статусом.
+
+[Промпт для account](account-app-version-prompt.md).

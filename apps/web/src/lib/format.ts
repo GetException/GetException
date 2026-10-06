@@ -11,7 +11,11 @@ export const dateTime = (value: Date) =>
 
 export const number = (value: number) => value.toLocaleString("en-US");
 
-export function releaseLabel(value: string) {
+export function releaseLabel(value: string, appVersion?: string | null) {
+  if (appVersion) {
+    return appVersion;
+  }
+
   const parts = value.split("@");
 
   return parts.length === 2 ? parts[1]!.slice(0, 8) : value;

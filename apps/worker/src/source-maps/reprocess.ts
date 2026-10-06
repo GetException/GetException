@@ -4,6 +4,7 @@ import { originalFrameSchema, safeEventSchema } from "@getexception/protocol";
 import { SourceMapStore } from "@getexception/source-maps";
 import { fingerprint } from "../fingerprint";
 import { resolveFrames } from "./resolve";
+import { recordIssueObservation, transferIssueHistory } from "../issue-history";
 
 export async function reprocessOneEvent(
   db: Database,
@@ -32,6 +33,7 @@ export async function reprocessOneEvent(
     handled: event.handled,
     environment: event.environment,
     ...(event.release ? { release: event.release } : {}),
+    ...(event.appVersion ? { appVersion: event.appVersion } : {}),
     frames: event.frames,
     tags: event.tags,
     breadcrumbs: event.breadcrumbs,
@@ -109,6 +111,40 @@ export async function reprocessOneEvent(
           eventId: event.eventId,
         },
       });
+      const history = await tx.issueHistory.findFirst({
+        where: {
+          issueId: previous.id,
+          canonical: true,
+          environment: event.environment,
+        },
+      });
+
+      await recordIssueObservation(
+        tx,
+        destination,
+        safe,
+        event.receivedAt,
+        hash,
+        history?.firstSeenKnown === true &&
+          history.firstRelease === event.release,
+      );
+
+      const [retained, destinations] = await Promise.all([
+        tx.errorEvent.count({ where: { issueId: previous.id } }),
+        tx.issueActivity.findMany({
+          where: { fromIssueId: previous.id },
+          distinct: ["toIssueId"],
+          select: { toIssueId: true },
+          take: 2,
+        }),
+      ]);
+
+      // Lifetime eventCount may exceed retained events after retention. Only a
+      // one-to-one regrouping can safely transfer the old group's full history.
+      if (retained === 1 && destinations.length === 1) {
+        await transferIssueHistory(tx, previous, destination);
+      }
+
       await tx.$executeRaw`INSERT INTO audit_log(id, action, success) VALUES (${randomUUID()}, 'issue_symbolication', true)`;
     }
 

@@ -40,6 +40,7 @@ const release = {
   id: "release",
   projectId: "account",
   name: releaseName,
+  project: { name: "account" },
   deployments: [
     {
       environment: "staging",
@@ -59,6 +60,7 @@ const issue = {
   eventCount: 2,
   firstSeen: date,
   lastSeen: date,
+  histories: [],
 };
 const selected = {
   id: "stored-event",
@@ -216,6 +218,51 @@ it("shows selected-event MR build context and recent activity on the issue", asy
   expect(html).toContain("Browsers and releases");
   expect(html).toContain(selected.eventId);
   expect(db.release.findUnique).toHaveBeenCalledWith(
-    expect.objectContaining({ select: { id: true, deployments: true } }),
+    expect.objectContaining({
+      select: { id: true, deployments: true, appVersion: true },
+    }),
   );
+});
+
+it("shows app versions and the first release of a newly observed issue", async () => {
+  const histories = [
+    {
+      environment: "staging",
+      firstSeen: date,
+      lastSeen: date,
+      firstRelease: releaseName,
+      lastRelease: releaseName,
+      firstAppVersion: "3.192.75",
+      lastAppVersion: "3.192.75",
+      firstSeenKnown: true,
+    },
+  ];
+  const versioned = { ...release, appVersion: "3.192.75" };
+
+  db.issue.findMany.mockResolvedValue([{ ...issue, histories }]);
+  db.issue.findFirst.mockResolvedValue({ ...issue, histories });
+  db.release.findMany.mockResolvedValue([versioned]);
+  db.release.findUnique.mockResolvedValue(versioned);
+  const listing = renderToStaticMarkup(
+    await IssuesPage({
+      searchParams: Promise.resolve({
+        release: releaseName,
+        environment: "staging",
+        novelty: "new",
+      }),
+    }),
+  );
+
+  expect(listing).toContain("New in 3.192.75");
+  expect(listing).toContain('aria-label="First appearance"');
+  const detail = renderToStaticMarkup(
+    await IssuePage({
+      params: Promise.resolve({ id: "issue" }),
+      searchParams: Promise.resolve({}),
+    }),
+  );
+
+  expect(detail).toContain("First and latest releases");
+  expect(detail).toContain("3.192.75");
+  expect(detail).toContain("New in 3.192.75");
 });

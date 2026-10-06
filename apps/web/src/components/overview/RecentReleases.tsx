@@ -14,6 +14,7 @@ export function RecentReleases({
     id: string;
     projectId: string;
     name: string;
+    appVersion?: string | null;
     project: { name: string };
     latest: Date;
     deployments: DeploymentSummary[];
@@ -51,7 +52,7 @@ export function RecentReleases({
                   environment: filters.environment,
                 })}
               >
-                {releaseLabel(release.name)} ↗
+                {releaseLabel(release.name, release.appVersion)} ↗
               </Link>
               <small className="muted">
                 {release.project.name} · {dateTime(release.latest)}

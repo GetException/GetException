@@ -44,8 +44,13 @@ export async function registerRelease(
     const registeredAt = new Date();
     const release = await tx.release.upsert({
       where: { projectId_name: { projectId, name: input.release } },
-      create: { projectId, name: input.release, lastActivityAt: registeredAt },
-      update: { lastActivityAt: registeredAt },
+      create: {
+        projectId,
+        name: input.release,
+        appVersion: input.appVersion,
+        lastActivityAt: registeredAt,
+      },
+      update: { appVersion: input.appVersion, lastActivityAt: registeredAt },
     });
 
     await tx.releaseDeployment.upsert({

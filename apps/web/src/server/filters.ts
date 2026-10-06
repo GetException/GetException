@@ -3,6 +3,7 @@ import type { Prisma } from "@getexception/db";
 import { pageNumber, textParam, type Search } from "../lib/search-params";
 import { tableSort } from "../lib/table-sort";
 import { activityDateRange } from "../lib/activity";
+import { newInReleaseWhere } from "./issues/history";
 
 export function issueFilters(search: Search) {
   return {
@@ -26,6 +27,10 @@ export function issueFilters(search: Search) {
       : "all",
     ...tableSort(search, "issues"),
     release: textParam(search.release),
+    novelty:
+      textParam(search.release) && textParam(search.novelty) === "new"
+        ? "new"
+        : "all",
     page: pageNumber(search.page),
   };
 }
@@ -79,5 +84,22 @@ export function issueWhere(
           }
         : {}),
     },
+    ...(filters.novelty === "new"
+      ? {
+          AND: [
+            newInReleaseWhere(
+              filters.release,
+              filters.environment,
+              new Date(now),
+              {
+                ...eventScope,
+                ...(filters.source === "mapped"
+                  ? { symbolicationState: { in: ["complete", "partial"] } }
+                  : {}),
+              },
+            ),
+          ],
+        }
+      : {}),
   };
 }

@@ -7,6 +7,7 @@ import {
   SOURCE_MAP_STATES,
 } from "../../components/releases/presentation";
 import type { releaseFilters } from "./filters";
+import { RETENTION_DAYS } from "@getexception/protocol";
 
 export function releasePageIds(
   db: Database,
@@ -29,7 +30,7 @@ export function releasePageIds(
   )} ELSE NULL END`;
   const eventScope = Prisma.sql`e."projectId" = r."projectId" AND e.release = r.name ${environment !== "all" ? Prisma.sql`AND e.environment = ${environment}` : Prisma.empty}`;
   const columns = {
-    version: Prisma.sql`lower(r.name)`,
+    version: Prisma.sql`app_version_sort_key(r."appVersion") COLLATE "C"`,
     environment: Prisma.sql`(SELECT string_agg(labels.label, ', ' ORDER BY labels.label) FROM
       (SELECT DISTINCT ${environmentLabel} AS label FROM release_deployment d WHERE d."releaseId" = r.id) labels)`,
     review: Prisma.sql`(SELECT min(split_part(d."reviewKey", ':', 3)::bigint) FROM release_deployment d WHERE d."releaseId" = r.id AND d."reviewKey" ~ '^gitlab:[1-9][0-9]{0,9}:[1-9][0-9]{0,9}$')`,
@@ -38,12 +39,17 @@ export function releasePageIds(
     maps: mapLabel,
   };
 
+  const tieBreaker =
+    filters.sort === "version"
+      ? Prisma.sql`lower(r.name) ${filters.direction === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`}, r.id`
+      : Prisma.sql`r.id`;
+
   return db.$queryRaw<
     { id: string }[]
   >(Prisma.sql`SELECT r.id FROM release r JOIN project p ON p.id = r."projectId"
     WHERE ${projectScopeSql(member)}
     ${project ? Prisma.sql`AND p.id = ${project}` : Prisma.empty}
-    ${q ? Prisma.sql`AND r.name ILIKE ${`%${q}%`}` : Prisma.empty}
+    ${q ? Prisma.sql`AND (r.name ILIKE ${`%${q}%`} OR r."appVersion" ILIKE ${`%${q}%`})` : Prisma.empty}
     ${maps === "unavailable" ? Prisma.sql`AND r."sourceMapsState" IN ('missing', 'removed', 'failed')` : maps !== "all" ? Prisma.sql`AND ${mapState} = ${maps}` : Prisma.empty}
     ${
       environment !== "all" || review
@@ -52,7 +58,7 @@ export function releasePageIds(
       ${review ? Prisma.sql`AND d."reviewKey" = ${review}` : Prisma.empty})`
         : Prisma.empty
     }
-    ORDER BY ${sqlOrder(columns, filters, "latest", Prisma.sql`r.id`)} ${sqlPage(page)}`);
+    ORDER BY ${sqlOrder(columns, filters, "latest", tieBreaker)} ${sqlPage(page)}`);
 }
 
 export function releaseIssuePageIds(
@@ -62,6 +68,7 @@ export function releaseIssuePageIds(
   environment: string,
   sorting: TableSort,
   page: number,
+  newOnly = false,
 ) {
   const eventScope = Prisma.sql`e."projectId" = i."projectId" AND e."issueId" = i.id AND e.release = ${release} ${environment !== "all" ? Prisma.sql`AND e.environment = ${environment}` : Prisma.empty}`;
   const columns = {
@@ -74,5 +81,13 @@ export function releaseIssuePageIds(
     { id: string }[]
   >(Prisma.sql`SELECT i.id FROM issue i WHERE i."projectId" = ${projectId}
     AND EXISTS (SELECT 1 FROM error_event e WHERE ${eventScope})
+    ${
+      newOnly
+        ? Prisma.sql`AND EXISTS (SELECT 1 FROM issue_history h WHERE h."issueId" = i.id AND h.canonical AND h."firstSeenKnown" AND h."firstRelease" = ${release}
+      AND h."lastSeen" >= ${new Date(Date.now() - RETENTION_DAYS.issueHistory * 86400_000)}
+      AND EXISTS (SELECT 1 FROM error_event observed WHERE observed."issueId" = i.id AND observed.release = ${release} AND observed.environment = h.environment)
+      ${environment !== "all" ? Prisma.sql`AND h.environment = ${environment}` : Prisma.empty})`
+        : Prisma.empty
+    }
     ORDER BY ${sqlOrder(columns, sorting, "events", Prisma.sql`i.id`)} ${sqlPage(page)}`);
 }

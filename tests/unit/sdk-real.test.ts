@@ -121,3 +121,43 @@ it("sends API/browser/debug identity without leaking scope data into the next ev
     status_code: 504,
   });
 });
+
+it("sends the app version independently of SDK/release and preserves it when route context changes", async () => {
+  const send = vi.fn(async () => new Response(null, { status: 200 }));
+
+  vi.stubGlobal("fetch", send);
+  SDK.init({
+    dsn: `https://${randomBytes(32).toString("hex")}@ingest.example.test/abcdefab-1234-4567-8123-abcdefabcdef`,
+    release: `account@${"a".repeat(40)}`,
+    appVersion: "3.192.75",
+  });
+  SDK.setContext("app", { route: "/settings" });
+  SDK.captureException(new Error("Version metadata"));
+  await SDK.flush();
+  const raw = JSON.parse(
+    String(
+      (send.mock.calls[0] as unknown as [string, RequestInit])[1].body,
+    ).split("\n")[2]!,
+  );
+
+  expect(raw.contexts.app).toEqual({ version: "3.192.75", route: "/settings" });
+  expect(raw.release).toBe(`account@${"a".repeat(40)}`);
+  expect(raw.sdk.version).toBe(version);
+});
+
+it("ignores invalid appVersion options without disabling capture", async () => {
+  const send = vi.fn(async () => new Response(null, { status: 200 }));
+
+  vi.stubGlobal("fetch", send);
+  SDK.init({
+    dsn: `https://${randomBytes(32).toString("hex")}@ingest.example.test/abcdefab-1234-4567-8123-abcdefabcdef`,
+    appVersion: "private@example.test",
+  });
+  expect(SDK.captureException(new Error("Still captured"))).toMatch(
+    /^[a-f0-9]{32}$/,
+  );
+  await SDK.flush();
+  expect(
+    String((send.mock.calls[0] as unknown as [string, RequestInit])[1].body),
+  ).not.toContain("private@example.test");
+});

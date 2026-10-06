@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BoundaryError, record } from "./json";
+import { appVersionSchema, sanitizeAppVersion } from "./releases";
 import {
   apiContextSchema,
   browserContextSchema,
@@ -22,6 +23,8 @@ export {
   RELEASE_ENVIRONMENTS,
   deploymentSchema,
   releaseRegistrationSchema,
+  appVersionSchema,
+  sanitizeAppVersion,
   type ReleaseDeploymentInput,
 } from "./releases";
 
@@ -86,6 +89,7 @@ export const safeEventSchema = z
     handled: z.boolean(),
     environment: z.enum(["production", "staging", "development"]),
     release: z.string().max(160).optional(),
+    appVersion: appVersionSchema.optional(),
     dist: z.string().max(64).optional(),
     route: z.string().max(512).optional(),
     api: apiContextSchema.optional(),
@@ -349,6 +353,14 @@ export function sanitizeEvent(
     out.dist = input.dist;
   }
 
+  const appVersion = sanitizeAppVersion(
+    record(record(input.contexts).app).version,
+  );
+
+  if (appVersion) {
+    out.appVersion = appVersion;
+  }
+
   const route = safePath(record(record(input.contexts).app).route);
 
   if (route) {
@@ -392,7 +404,14 @@ export function toSentryEvent(event: SafeEvent, sdkVersion = "0.1.0") {
     tags: event.tags,
     breadcrumbs: event.breadcrumbs,
     contexts: {
-      ...(event.route ? { app: { route: event.route } } : {}),
+      ...(event.route || event.appVersion
+        ? {
+            app: {
+              ...(event.route ? { route: event.route } : {}),
+              ...(event.appVersion ? { version: event.appVersion } : {}),
+            },
+          }
+        : {}),
       ...(event.api ? { api: event.api } : {}),
       ...(event.browser ? { browser: event.browser } : {}),
     },

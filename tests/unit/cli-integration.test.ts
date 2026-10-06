@@ -331,10 +331,14 @@ it("rebuilds without maps after failed preparation and registers only after depl
   const deploy = vi.fn(async () => {
     sequence.push("deploy");
   });
-  const transport: typeof fetch = vi.fn(async (input) => {
+  const transport: typeof fetch = vi.fn(async (input, request) => {
     const path = String(input);
 
     sequence.push(path.endsWith("/releases") ? "register" : "context");
+
+    if (path.endsWith("/releases")) {
+      expect(JSON.parse(String(request?.body)).appVersion).toBe("3.192.75");
+    }
 
     return new Response(
       JSON.stringify(path.endsWith("/ci?version=2") ? context() : {}),
@@ -345,6 +349,7 @@ it("rebuilds without maps after failed preparation and registers only after depl
     url: "https://monitor.example.test",
     projectId,
     releasePrefix: "account",
+    appVersion: "3.192.75",
     repository,
     environment: "production",
     environmentName: "production/app",

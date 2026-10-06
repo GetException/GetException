@@ -1,3 +1,6 @@
+import { historyScope } from "../../../server/issues/history";
+import { NewInRelease } from "../../../components/issues/NewInRelease";
+import { releaseLabel } from "../../../lib/format";
 import { projectScope } from "../../../server/access";
 import { PAGE_SIZE } from "../../../lib/pagination";
 import Link from "next/link";
@@ -27,7 +30,7 @@ export default async function IssuesPage({
   const filters = issueFilters(await searchParams);
   const where = issueWhere(member, filters);
   const orderBy = issueOrder(filters);
-  const [projects, issues, total] = await Promise.all([
+  const [projects, issues, total, selectableReleases] = await Promise.all([
     db.project.findMany({
       where: projectScope(member),
       orderBy: { name: "asc" },
@@ -39,9 +42,26 @@ export default async function IssuesPage({
       orderBy,
       skip: (filters.page - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
-      include: { project: { select: { name: true } } },
+      include: {
+        project: { select: { name: true } },
+        histories: { where: historyScope(filters.environment) },
+      },
     }),
     db.issue.count({ where }),
+    db.release.findMany({
+      where: {
+        project: {
+          ...projectScope(member),
+          ...(filters.project ? { id: filters.project } : {}),
+        },
+        ...(filters.environment !== "all"
+          ? { deployments: { some: { environment: filters.environment } } }
+          : {}),
+      },
+      orderBy: { lastActivityAt: "desc" },
+      take: 200,
+      include: { project: { select: { name: true } } },
+    }),
   ]);
   const latestEvents = await latestIssueEvents(
     db,
@@ -100,9 +120,7 @@ export default async function IssuesPage({
         <form key={JSON.stringify(filters)} className="filters" method="get">
           <SortFields sorting={filters} />
           <input type="hidden" name="status" value={filters.status} />
-          {filters.release && (
-            <input type="hidden" name="release" value={filters.release} />
-          )}
+
           <label className="filter-field search-field">
             Search
             <input
@@ -124,6 +142,39 @@ export default async function IssuesPage({
               {["production", "staging", "development"].map((value) => (
                 <option key={value}>{value}</option>
               ))}
+            </select>
+          </label>
+          <label className="filter-field">
+            Release
+            <select
+              name="release"
+              defaultValue={filters.release}
+              aria-label="Release"
+            >
+              <option value="">All releases</option>
+              {filters.release &&
+                !selectableReleases.some((r) => r.name === filters.release) && (
+                  <option value={filters.release}>
+                    {releaseLabel(filters.release)}
+                  </option>
+                )}
+              {selectableReleases.map((r) => (
+                <option key={r.id} value={r.name}>
+                  {r.project.name} · {releaseLabel(r.name, r.appVersion)}
+                  {r.appVersion ? ` · ${releaseLabel(r.name)}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="filter-field">
+            First appearance
+            <select
+              name="novelty"
+              defaultValue={filters.novelty}
+              aria-label="First appearance"
+            >
+              <option value="all">All issues</option>
+              <option value="new">New in selected release</option>
             </select>
           </label>
           <label className="filter-field">
@@ -153,9 +204,22 @@ export default async function IssuesPage({
           </label>
           <button className="button">Apply filters</button>
         </form>
+        {!filters.release && (
+          <p className="content-note">
+            Choose a release to filter issues first observed in that build.
+            History expires after 90 days without activity.
+          </p>
+        )}
         {filters.release && (
           <div className="active-filters">
-            <span className="pill mono">Release: {filters.release}</span>
+            <span className="pill mono">
+              Release:{" "}
+              {releaseLabel(
+                filters.release,
+                selectableReleases.find((r) => r.name === filters.release)
+                  ?.appVersion,
+              )}
+            </span>
             <Link
               className="text-link"
               href={linkTo("/issues", {
@@ -184,6 +248,10 @@ export default async function IssuesPage({
                     ? releasesByName.get(`${issue.projectId}:${latest.release}`)
                     : undefined;
 
+                  const first = issue.histories.find(
+                    (h) => h.environment === latest?.environment,
+                  );
+
                   return (
                     <tr key={issue.id}>
                       <td>
@@ -200,11 +268,22 @@ export default async function IssuesPage({
                               <small title={issue.title}>{issue.title}</small>
                             </span>
                           </Link>
+                          {first?.firstSeenKnown &&
+                            first.firstRelease &&
+                            first.firstRelease === latest?.release && (
+                              <NewInRelease
+                                release={first.firstRelease}
+                                appVersion={
+                                  release?.appVersion ?? first.firstAppVersion
+                                }
+                              />
+                            )}
                           {latest ? (
                             <IssueBuildContext
                               projectId={issue.projectId}
                               environment={latest.environment}
                               releaseName={latest.release}
+                              appVersion={latest.appVersion}
                               release={release}
                               symbolicationState={latest.symbolicationState}
                             />

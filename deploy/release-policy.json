@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 10,
-  "rollbackFromSchemaVersions": [10],
+  "schemaVersion": 11,
+  "rollbackFromSchemaVersions": [11],
   "databaseRuntime": "postgres17-alpine-v1",
   "platform": "linux/amd64"
 }

@@ -3,6 +3,7 @@ export const RETENTION_DAYS = {
   issues: 30,
   inbox: 30,
   issueActivity: 30,
+  issueHistory: 90,
   sourceMaps: 30,
   sourceMapsMaximum: 60,
   incompleteUploads: 1,

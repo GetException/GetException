@@ -21,6 +21,7 @@ export type BreakdownRow = {
   label: string | null;
   count: number;
   releaseId?: string | null;
+  appVersion?: string | null;
 };
 
 export function activityWhere(
@@ -142,7 +143,7 @@ export async function eventBreakdowns(
       GROUP BY 1 ORDER BY count DESC, label ASC NULLS LAST LIMIT 5
     `),
     db.$queryRaw<BreakdownRow[]>(Prisma.sql`
-      SELECT e.release AS label, r.id AS "releaseId", count(*)::integer AS count
+      SELECT e.release AS label, r.id AS "releaseId", r."appVersion" AS "appVersion", count(*)::integer AS count
       FROM error_event e JOIN project p ON p.id = e."projectId"
       LEFT JOIN release r ON r."projectId" = e."projectId" AND r.name = e.release
       WHERE ${scope} GROUP BY e."projectId", e.release, r.id

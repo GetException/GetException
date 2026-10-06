@@ -10,6 +10,7 @@ import {
 
 type Release = {
   id: string;
+  appVersion?: string | null;
   deployments: DeploymentSummary[];
 };
 
@@ -19,12 +20,14 @@ export function IssueBuildContext({
   releaseName,
   release,
   symbolicationState,
+  appVersion,
 }: {
   projectId: string;
   environment: string;
   releaseName?: string | null;
   release?: Release | null;
   symbolicationState?: string;
+  appVersion?: string | null;
 }) {
   const reviews =
     environment === "staging" && release
@@ -54,10 +57,12 @@ export function IssueBuildContext({
       {releaseName &&
         (release ? (
           <Link className="text-link mono" href={`/releases/${release.id}`}>
-            ◇ {releaseLabel(releaseName)}
+            ◇ {releaseLabel(releaseName, release.appVersion ?? appVersion)}
           </Link>
         ) : (
-          <span className="mono muted">◇ {releaseLabel(releaseName)}</span>
+          <span className="mono muted">
+            ◇ {releaseLabel(releaseName, appVersion)}
+          </span>
         ))}
       {reviews.map((review) => (
         <Link

@@ -13,6 +13,10 @@ export async function retainReleases(db: Database, now = new Date()) {
           WHERE e."projectId" = r."projectId" AND e.release = r.name
         )
         AND NOT EXISTS (
+          SELECT 1 FROM issue_history h WHERE h."projectId" = r."projectId"
+            AND (h."firstRelease" = r.name OR h."lastRelease" = r.name)
+        )
+        AND NOT EXISTS (
           SELECT 1 FROM source_map_upload u
           WHERE u."projectId" = r."projectId" AND u.release = r.name
         )
@@ -30,6 +34,10 @@ export async function retainReleases(db: Database, now = new Date()) {
       AND NOT EXISTS (
         SELECT 1 FROM error_event e
         WHERE e."projectId" = r."projectId" AND e.release = r.name
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM issue_history h WHERE h."projectId" = r."projectId"
+          AND (h."firstRelease" = r.name OR h."lastRelease" = r.name)
       )
       AND NOT EXISTS (
         SELECT 1 FROM source_map_upload u

@@ -10,6 +10,7 @@ import {
   sanitizeTags,
   safePath,
   sanitizeApiContext,
+  sanitizeAppVersion,
   type ApiContext,
   toSentryEvent,
   type SafeBreadcrumb,
@@ -26,6 +27,7 @@ export interface CaptureContext {
 export interface BrowserOptions {
   dsn: string;
   release?: string;
+  appVersion?: string;
   environment?: "production" | "staging" | "development";
   dist?: string;
   enabled?: boolean;
@@ -76,6 +78,7 @@ export function init(options?: BrowserOptions): void {
     }
 
     const endpoint = dsnEndpoint(options.dsn);
+    const appVersion = sanitizeAppVersion(options.appVersion);
     const browser =
       typeof navigator === "undefined"
         ? undefined
@@ -118,6 +121,7 @@ export function init(options?: BrowserOptions): void {
                   ...event,
                   contexts: {
                     ...event.contexts,
+                    app: { ...event.contexts?.app, version: appVersion },
                     ...(browser ? { browser } : {}),
                   },
                 },
