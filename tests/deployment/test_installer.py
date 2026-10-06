@@ -245,6 +245,28 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(installation.current(), target)
         self.assertTrue(volumes)
 
+    def test_patched_postgres_image_preserves_existing_alpine_database(self):
+        installation, old = self.active()
+        target = self.release()
+        for directory in [old, target]:
+            info = installer.metadata(directory)
+            info["databaseRuntime"] = installer.DATABASE_CURRENT
+            info["images"].pop("mail")
+            info["images"]["caddy"] = "ghcr.io/getexception/getexception-caddy@sha256:" + secrets.token_hex(32)
+            if directory == target:
+                info["images"]["postgres"] = "ghcr.io/getexception/getexception-postgres@sha256:" + secrets.token_hex(32)
+            installer.write_json(directory / "release.json", info)
+        with patch.object(installation, "restore_database") as restore:
+            installation.deploy(target)
+        restore.assert_not_called()
+        self.assertEqual(installation.current(), target)
+        self.assertIn((old.name, ("backup",)), installation.calls)
+        info = installer.metadata(target)
+        info["images"]["postgres"] = "ghcr.io/untrusted/postgres@sha256:" + secrets.token_hex(32)
+        installer.write_json(target / "release.json", info)
+        with self.assertRaisesRegex(installer.Failure, "expected GHCR"):
+            installer.metadata(target)
+
     def test_database_preflight_rejects_existing_target_volume_before_downtime(self):
         installation, old = self.active()
         target = self.release()

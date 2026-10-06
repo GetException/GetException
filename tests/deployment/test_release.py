@@ -60,6 +60,12 @@ class DockerSmokeTests(unittest.TestCase):
 
 
 class ImageReleaseTests(unittest.TestCase):
+    def test_patched_postgres_is_built_when_its_package_does_not_exist(self):
+        error = urllib.error.HTTPError("https://api.github.com", 404, "missing", {}, None)
+        with patch.object(images.urllib.request, "urlopen", side_effect=error), patch.object(images.subprocess, "run") as docker:
+            self.assertIsNone(images.existing_digest("postgres", secrets.token_hex(20), "test"))
+            docker.assert_not_called()
+
     def test_first_package_can_be_published(self):
         error = urllib.error.HTTPError("https://api.github.com", 404, "missing", {}, None)
         with patch.object(images.urllib.request, "urlopen", side_effect=error), patch.object(images.subprocess, "run") as docker:

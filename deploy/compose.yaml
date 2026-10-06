@@ -22,7 +22,7 @@ x-health: &health
   start_period: 30s
 services:
   postgres:
-    image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    image: ${POSTGRES_IMAGE:?immutable postgres image required}
     restart: unless-stopped
     environment:
       POSTGRES_DB: getexception

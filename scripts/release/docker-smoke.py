@@ -61,7 +61,7 @@ def main():
         work = Path(temporary).resolve()
         root = work / "installation"
         images = {}
-        names = ["web", "ingest", "worker", "migrate", "caddy"]
+        names = ["web", "ingest", "worker", "migrate", "caddy", "postgres"]
         sha = args.published or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         env = dict(os.environ)
         env.update(ACME_EMAIL="")
@@ -174,9 +174,10 @@ def main():
         legacy_info = installer.metadata(legacy)
         legacy_info["sha"] = legacy.name
         legacy_info.pop("databaseRuntime", None)
+        legacy_info["images"].pop("postgres", None)
         installer.write_json(legacy / "release.json", legacy_info)
         legacy_compose = (legacy / "compose.yaml").read_text().replace(
-            "postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24",
+            "${POSTGRES_IMAGE:?immutable postgres image required}",
             "postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652",
         ).replace("postgres-data-alpine-v1", "postgres-data")
         (legacy / "compose.yaml").write_text(legacy_compose)

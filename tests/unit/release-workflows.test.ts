@@ -14,6 +14,7 @@ type Workflow = {
       if?: string;
       needs?: string | string[];
       permissions?: Record<string, string>;
+      strategy?: { matrix: { target: string[] } };
       steps?: {
         uses?: string;
         run?: string;
@@ -78,11 +79,16 @@ describe("automatic SDK and server release", () => {
     expect(JSON.stringify(config.jobs["build-images"])).toContain(
       "scripts/release/scan-image.py",
     );
-    expect(config.jobs["publish-bootstrap"].needs).toEqual(
-      expect.arrayContaining(["build-images", "scan-infrastructure"]),
-    );
-    expect(JSON.stringify(config.jobs["scan-infrastructure"])).toContain(
-      "python3 scripts/release/scan-infrastructure.py",
+    expect(dependencies(config, "publish-bootstrap")).toContain("build-images");
+    expect(config.jobs["build-images"].strategy?.matrix.target).toEqual(
+      expect.arrayContaining([
+        "web",
+        "ingest",
+        "worker",
+        "migrate",
+        "caddy",
+        "postgres",
+      ]),
     );
     expect(JSON.stringify(config.jobs["bootstrap-e2e"])).toContain(
       "--published",

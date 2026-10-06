@@ -73,7 +73,7 @@ if compose_command:
     values.update(SETUP_TOKEN_HASH="b" * 64, DASHBOARD_HOST="monitor.example.com", INGEST_HOST="ingest.example.com",
                   ACME_EMAIL="")
     values.update({name.upper() + "_IMAGE": "ghcr.io/getexception/getexception-" + name + ":validation"
-                   for name in ["web", "ingest", "worker", "migrate", "caddy"]})
+                   for name in ["web", "ingest", "worker", "migrate", "caddy", "postgres"]})
     with tempfile.TemporaryDirectory() as temporary:
         path = Path(temporary) / ".env"
         path.write_text(env_text(values))

@@ -40,12 +40,10 @@ def evaluate(report, target, today=None):
 def scan(reference, target):
     if target not in TARGETS or not re.fullmatch(r"[a-z0-9./:_-]+@sha256:[a-f0-9]{64}", reference):
         raise ValueError("Image scan requires an immutable reference and known target")
-    if target == "postgres":
-        expected = "postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24"
-        if reference != expected:
-            raise ValueError("Review the PostgreSQL version before reusing the applicability assessment")
-    elif not reference.startswith("ghcr.io/getexception/getexception-" + target + "@sha256:"):
+    if not reference.startswith("ghcr.io/getexception/getexception-" + target + "@sha256:"):
         raise ValueError("Unexpected runtime image repository")
+    if target == "postgres" and "FROM postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24 AS postgres" not in (ROOT / "docker/Dockerfile").read_text().splitlines():
+        raise ValueError("Review the PostgreSQL version before reusing the applicability assessment")
     if not (ROOT / "docker/Dockerfile").read_text().startswith("FROM node:24.21.0-alpine3.24@sha256:"):
         raise ValueError("Review the Node version before reusing the applicability assessment")
     report_path = ROOT / (".artifacts/grype-" + target + ".json")

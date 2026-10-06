@@ -62,3 +62,7 @@ COPY --from=caddy-binary /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-ce
 WORKDIR /srv
 EXPOSE 80 443
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+
+# Patch system libraries without changing PostgreSQL or its data format.
+FROM postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24 AS postgres
+RUN apk upgrade --no-cache

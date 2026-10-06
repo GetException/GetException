@@ -86,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [web, ingest, worker, migrate, caddy]
+        target: [web, ingest, worker, migrate, caddy, postgres]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -116,6 +116,7 @@ jobs:
           push: true
           sbom: true
           provenance: mode=max
+          no-cache-filters: base,postgres
           tags: |
             ghcr.io/getexception/getexception-${{ matrix.target }}:sha-${{ github.sha }}
             ghcr.io/getexception/getexception-${{ matrix.target }}:stable
@@ -152,26 +153,8 @@ jobs:
           name: image-${{ matrix.target }}
           path: image-*.json
           retention-days: 7
-  scan-infrastructure:
-    needs: checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - run: python3 scripts/release/install-tools.py grype
-      - run: python3 scripts/release/scan-infrastructure.py
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: ${{ always() }}
-        with:
-          name: vulnerabilities-infrastructure
-          path: .artifacts/grype-*.json
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 7
   publish-bootstrap:
-    needs: [build-images, scan-infrastructure]
+    needs: build-images
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

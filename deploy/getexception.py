@@ -29,7 +29,7 @@ LEGACY_FILES = {"compose.yaml", "Caddyfile", "init-db.sh", "getexception.py", ".
 FILES = LEGACY_FILES | {"backup.py", "getexception-backup.service", "getexception-backup.timer"}
 SERVICES = ["web", "ingest", "worker-events", "worker-retention"]
 IMAGE_REPOSITORIES = {"ghcr.io/getexception/getexception-" + name
-                      for name in ["web", "ingest", "worker", "mail", "migrate", "caddy"]}
+                      for name in ["web", "ingest", "worker", "mail", "migrate", "caddy", "postgres"]}
 SECRET_KEYS = ["POSTGRES_PASSWORD", "MIGRATE_PASSWORD", "WEB_PASSWORD", "INGEST_PASSWORD",
                "WORKER_PASSWORD", "BACKUP_PASSWORD", "BETTER_AUTH_SECRET",
                "TOTP_ENCRYPTION_KEY", "AUTH_RATE_KEY"]
@@ -187,7 +187,8 @@ def metadata(directory, expected=None):
         raise Failure("Missing migration compatibility metadata.")
     images = value.get("images", {})
     if set(images) not in ({"web", "ingest", "worker", "migrate"}, {"web", "ingest", "worker", "mail", "migrate"},
-                          {"web", "ingest", "worker", "migrate", "caddy"}):
+                          {"web", "ingest", "worker", "migrate", "caddy"},
+                          {"web", "ingest", "worker", "migrate", "caddy", "postgres"}):
         raise Failure("Release is missing runtime images.")
     if value.get("databaseRuntime", "postgres17-bookworm-v1") not in {"postgres17-bookworm-v1", "postgres17-alpine-v1"}:
         raise Failure("Unsupported PostgreSQL runtime.")

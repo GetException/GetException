@@ -46,3 +46,11 @@ class ImageScanTests(unittest.TestCase):
             finding = self.finding()
             finding["vulnerability"] = {"id": "unreviewed", "severity": severity}
             self.assertEqual(len(scanner.evaluate({"matches": [finding]}, "web")[0]), 1)
+
+    def test_openssl_findings_in_postgres_are_not_exempted(self):
+        for cve in ["CVE-2026-54873", "CVE-2026-84782", "CVE-2026-84784", "CVE-2026-72897"]:
+            finding = self.finding()
+            finding["vulnerability"]["id"] = cve
+            finding["artifact"].update(name="libssl3", version="3.5.8-r0")
+            blocking, reviewed = scanner.evaluate({"matches": [finding]}, "postgres", date(2026, 10, 6))
+            self.assertEqual((len(blocking), len(reviewed)), (1, 0))
