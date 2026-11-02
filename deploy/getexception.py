@@ -14,6 +14,7 @@ import re
 import secrets
 import selectors
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -285,6 +286,60 @@ def docker_environment():
     return {key: os.environ[key] for key in allowed if key in os.environ}
 
 
+def command(*args):
+    return subprocess.check_output(args, text=True).strip()
+
+
+def configure_host_network():
+    if os.geteuid() != 0:
+        run(["sudo", "-n", sys.executable, str(Path(__file__).resolve()), "configure-network"])
+        return
+    path = Path("/etc/sysctl.d/99-disable-mptcp.conf")
+    path.write_text("# MPTCP mitigation; an updated kernel is still required.\nnet.mptcp.enabled = 0\n")
+    subprocess.run(["sysctl", "-w", "net.mptcp.enabled=0"], check=True)
+    changed = False
+    restart = []
+    for unit in ("containerd", "docker"):
+        raw = command("systemctl", "show", unit, "-p", "Environment", "--value")
+        environment = dict(value.split("=", 1) for value in shlex.split(raw) if "=" in value)
+        options = [value for value in environment.get("GODEBUG", "").split(",")
+                   if value and not value.startswith("multipathtcp=")]
+        options.append("multipathtcp=0")
+        value = ",".join(options)
+        directory = Path("/etc/systemd/system") / (unit + ".service.d")
+        directory.mkdir(parents=True, exist_ok=True)
+        dropin = directory / "99-disable-mptcp.conf"
+        quoted = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+        content = '[Service]\nEnvironment="GODEBUG=' + quoted + '"\n'
+        if not dropin.exists() or dropin.read_text() != content:
+            dropin.write_text(content)
+            changed = True
+        pid = command("systemctl", "show", unit, "-p", "MainPID", "--value")
+        if pid.isdigit() and int(pid):
+            entries = Path("/proc") / pid / "environ"
+            active = dict(item.split(b"=", 1) for item in entries.read_bytes().split(b"\0") if b"=" in item)
+            if b"multipathtcp=0" not in active.get(b"GODEBUG", b"").split(b","):
+                restart.append(unit)
+    before = command("docker", "ps", "--format", "{{.Names}}").splitlines()
+    if changed:
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+    for unit in restart:
+        subprocess.run(["systemctl", "restart", unit], check=True)
+    if "docker" in restart:
+        after = set(command("docker", "ps", "--format", "{{.Names}}").splitlines())
+        for name in before:
+            if name not in after:
+                subprocess.run(["docker", "start", name], check=True)
+    for row in command("lsns", "-t", "net", "-n", "-o", "PID").splitlines():
+        pid = row.strip()
+        result = subprocess.run(["nsenter", "--target", pid, "--net", "--",
+                                 "sysctl", "-w", "net.mptcp.enabled=0"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if result.returncode and (Path("/proc") / pid).exists():
+            raise Failure("Cannot disable MPTCP in a running network namespace.")
+    print("Host and Docker MPTCP policy applied.")
+
+
 class Installation:
     def __init__(self, root):
         self.root = root
@@ -304,9 +359,14 @@ class Installation:
         info = metadata(release)
         image_file = self.runtime / "images.env"
         atomic_write(image_file, env_text({key.upper() + "_IMAGE": value for key, value in info["images"].items()}))
+        network_file = self.runtime / ("mptcp-" + release.name + ".compose.json")
+        # Keep signed release files immutable, including when rolling back to an older release.
+        services = [*self.services(release), "postgres", "migrate", "caddy"]
+        atomic_write(network_file, json.dumps({"services": {
+            name: {"sysctls": {"net.mptcp.enabled": "0"}} for name in services}}))
         return run(["docker", "compose", "--project-name", "getexception", "--project-directory", str(release),
                     "--env-file", str(self.runtime / ".env"), "--env-file", str(image_file),
-                    "-f", str(release / "compose.yaml"), *args], env=docker_environment(), stdout=stdout, output_limit=output_limit, stdin=stdin)
+                    "-f", str(release / "compose.yaml"), "-f", str(network_file), *args], env=docker_environment(), stdout=stdout, output_limit=output_limit, stdin=stdin)
 
     def switch(self, release):
         temporary = self.root / ".current-next"
@@ -435,6 +495,20 @@ class Installation:
         self.compose(release, "up", "-d", "--wait", "--wait-timeout", "180", "--no-deps", *self.services(release))
         self.compose(release, "up", "-d", "--wait", "--wait-timeout", "90", "--no-deps", "caddy")
         self.smoke(release, defer_ingest_dns=defer_ingest_dns)
+        self.verify_mptcp(release)
+
+    def verify_mptcp(self, release):
+        containers = self.compose(release, "ps", "--quiet", "--status", "running").splitlines()
+        if not containers:
+            raise Failure("No running containers are available for network verification.")
+        for container in containers:
+            configured = run(["docker", "inspect", "--format", '{{index .HostConfig.Sysctls "net.mptcp.enabled"}}', container], env=docker_environment())
+            pid = run(["docker", "inspect", "--format", "{{.State.Pid}}", container], env=docker_environment())
+            if configured != "0" or not pid.isdigit() or int(pid) == 0:
+                raise Failure("A container has no persistent MPTCP policy or is not running.")
+            prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
+            if run([*prefix, "nsenter", "--target", pid, "--net", "--", "sysctl", "-n", "net.mptcp.enabled"]) != "0":
+                raise Failure("MPTCP is enabled in a container network namespace.")
 
     def smoke(self, release, *, defer_ingest_dns=False):
         config = read_env(self.runtime / ".env")
@@ -623,7 +697,7 @@ def prerequisites():
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["install", "update", "rollback", "status", "backup", "smoke", "prune-images"])
+    parser.add_argument("command", choices=["install", "update", "rollback", "status", "backup", "smoke", "prune-images", "configure-network"])
     parser.add_argument("--install-dir", default="/opt/getexception")
     parser.add_argument("--release")
     parser.add_argument("--archive-url")
@@ -636,6 +710,11 @@ def main():
     parser.add_argument("--ingest-host")
     parser.add_argument("--dry-run", action="store_true", help="List eligible image count without removing images")
     options = parser.parse_args()
+    if options.command == "configure-network":
+        if os.geteuid() != 0:
+            raise Failure("The network policy requires root or passwordless sudo.")
+        configure_host_network()
+        return
     if options.defer_ingest_dns and (options.command != "install" or options.require_ingestion_smoke or options.skip_start):
         raise Failure("--defer-ingest-dns requires install without --skip-start or --require-ingestion-smoke.")
     root = Path(options.install_dir).expanduser().resolve()
@@ -652,13 +731,16 @@ def main():
             target = fetch_release(root, options.release, options.archive_url,
                                    attestation_bundle=options.attestation_bundle, trusted_root=options.trusted_root)
             config = configure(root, options)
-            launcher = '#!/usr/bin/env bash\nset -euo pipefail\nroot="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"\nexec python3 "$root/current/getexception.py" "$@" --install-dir "$root"\n'
+            launcher = '#!/usr/bin/env bash\nset -euo pipefail\nroot="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"\nexec python3 "$root/runtime/controller.py" "$@" --install-dir "$root"\n'
+            # Keep the verified controller across application rollbacks so network policy persists.
+            atomic_write(root / "runtime/controller.py", Path(__file__).read_text(), 0o700)
             atomic_write(root / "getexception", launcher, 0o700)
             if options.skip_start:
                 if installation.current() is None:
                     installation.switch(target)
                 print("Release downloaded and configuration preserved. Services were not started.")
                 return
+            configure_host_network()
             installation.deploy(target, first=options.command == "install", require_ingestion=options.require_ingestion_smoke,
                                 defer_ingest_dns=options.defer_ingest_dns)
             print("Dashboard: https://" + config["DASHBOARD_HOST"])
@@ -672,6 +754,7 @@ def main():
                 print("Old GetException images " + ("eligible" if options.dry_run else "removed") +
                       ": " + str(installation.prune_images(dry_run=options.dry_run)))
             elif options.command == "rollback":
+                configure_host_network()
                 installation.rollback()
             elif options.command == "backup":
                 print("Backup saved: " + str(installation.backup(current)))

@@ -22,6 +22,8 @@ x-health: &health
   start_period: 30s
 services:
   postgres:
+    sysctls:
+      net.mptcp.enabled: "0"
     image: ${POSTGRES_IMAGE:?immutable postgres image required}
     restart: unless-stopped
     environment:
@@ -48,6 +50,8 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
   migrate:
+    sysctls:
+      net.mptcp.enabled: "0"
     image: ${MIGRATE_IMAGE:?Use a verified release}
     restart: "no"
     profiles: [maintenance]
@@ -57,6 +61,8 @@ services:
     networks: [database]
     depends_on: { postgres: { condition: service_healthy } }
   web:
+    sysctls:
+      net.mptcp.enabled: "0"
     <<: *runtime
     image: ${WEB_IMAGE:?Use a verified release}
     mem_limit: 1g
@@ -81,6 +87,8 @@ services:
           "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
   ingest:
+    sysctls:
+      net.mptcp.enabled: "0"
     <<: *runtime
     image: ${INGEST_IMAGE:?Use a verified release}
     environment:
@@ -98,6 +106,8 @@ services:
           "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
   worker-events:
+    sysctls:
+      net.mptcp.enabled: "0"
     <<: *runtime
     image: ${WORKER_IMAGE:?Use a verified release}
     volumes: [source-maps:/var/lib/getexception/source-maps:ro]
@@ -117,6 +127,8 @@ services:
           "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
   worker-retention:
+    sysctls:
+      net.mptcp.enabled: "0"
     <<: *runtime
     image: ${WORKER_IMAGE:?Use a verified release}
     volumes: [source-maps:/var/lib/getexception/source-maps]
@@ -136,6 +148,8 @@ services:
           "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
   caddy:
+    sysctls:
+      net.mptcp.enabled: "0"
     image: ${CADDY_IMAGE:?Use a verified release}
     restart: unless-stopped
     read_only: true
